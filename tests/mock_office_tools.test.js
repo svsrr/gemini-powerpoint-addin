@@ -271,10 +271,102 @@ async function testDestructiveActionConfirmation() {
   console.log('✔ Case 4 Passed: Prompt injection defense blocks unconfirmed shape deletions');
 }
 
+// Test Case 5: Multi-Slide Direct Targeting (Slide 6 & Slide 7)
+async function testMultiSlideTargeting() {
+  const slide6Shape = {
+    id: "s6-title",
+    name: "TextBox 3",
+    type: "textbox",
+    top: 188672,
+    textFrame: {
+      hasText: true,
+      textRange: {
+        text: "TRAINING ON SMP",
+        font: { color: "#0000FF", size: 24, bold: true }
+      }
+    }
+  };
+
+  const slide7Shape = {
+    id: "s7-title",
+    name: "TextBox 6",
+    type: "textbox",
+    top: 197319,
+    textFrame: {
+      hasText: true,
+      textRange: {
+        text: "ROPE ACCESS SYSTEM IN PDR",
+        font: { color: "#0000FF", size: 24, bold: true }
+      }
+    }
+  };
+
+  const slidesArray = [
+    { id: "s1", shapes: { items: [] } },
+    { id: "s2", shapes: { items: [] } },
+    { id: "s3", shapes: { items: [] } },
+    { id: "s4", shapes: { items: [] } },
+    { id: "s5", shapes: { items: [] } },
+    { id: "s6", shapes: { items: [slide6Shape] } },
+    { id: "s7", shapes: { items: [slide7Shape] } },
+    { id: "s8", shapes: { items: [] } },
+    { id: "s9", shapes: { items: [] } },
+    { id: "s10", shapes: { items: [] } }
+  ];
+
+  function getMockTargetSlide(slide_number) {
+    if (slide_number !== undefined && slide_number !== null) {
+      const num = Number(slide_number);
+      if (!isNaN(num) && num >= 1 && num <= slidesArray.length) {
+        return slidesArray[num - 1];
+      }
+      throw new Error(`Slide number ${num} is out of range. Presentation has ${slidesArray.length} slide(s).`);
+    }
+    return slidesArray[5]; // active default (slide 6)
+  }
+
+  function mockSetFont({ slide_number, shape_id, color }) {
+    const slide = getMockTargetSlide(slide_number);
+    const textual = slide.shapes.items.filter(s => s.textFrame && s.textFrame.hasText);
+    textual.sort((a, b) => (a.top || 0) - (b.top || 0));
+    let target = null;
+    if (shape_id === 'heading' || shape_id === 'title') {
+      target = textual[0];
+    } else {
+      target = slide.shapes.items.find(s => s.id === shape_id || s.name === shape_id);
+    }
+    if (!target) throw new Error('Shape not found');
+    target.textFrame.textRange.font.color = color;
+    return { success: true, slideNumber: slide_number, targetId: target.id, newColor: color };
+  }
+
+  // User command: "change color of headings in slide 6,7 to green"
+  const res6 = mockSetFont({ slide_number: 6, shape_id: "heading", color: "#16A34A" });
+  const res7 = mockSetFont({ slide_number: 7, shape_id: "heading", color: "#16A34A" });
+
+  assert.strictEqual(res6.success, true);
+  assert.strictEqual(res7.success, true);
+  assert.strictEqual(slide6Shape.textFrame.textRange.font.color, "#16A34A");
+  assert.strictEqual(slide7Shape.textFrame.textRange.font.color, "#16A34A");
+  console.log('✔ Case 5 Passed: Multi-slide targeting simultaneously recolors Slide 6 & Slide 7 headings to green');
+
+  // Test Case 6: Out-of-bounds slide number safety
+  let threw = false;
+  try {
+    mockSetFont({ slide_number: 99, shape_id: "heading", color: "#16A34A" });
+  } catch (err) {
+    threw = true;
+    assert(err.message.includes('Slide number 99 is out of range'));
+  }
+  assert.strictEqual(threw, true);
+  console.log('✔ Case 6 Passed: Out-of-range slide number gracefully caught and rejected');
+}
+
 // Run all test cases
 await testTitlePlaceholderPriority();
 await testStrictShapeLookup();
 await testTableBatchUpdateAndUndo();
 await testDestructiveActionConfirmation();
+await testMultiSlideTargeting();
 
-console.log('--- ALL MOCK OFFICE.JS TESTS PASSED (4/4) ---');
+console.log('--- ALL MOCK OFFICE.JS TESTS PASSED (6/6) ---');

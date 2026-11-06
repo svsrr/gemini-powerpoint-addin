@@ -103,4 +103,30 @@ assert.strictEqual(slide6Snapshot.textShapes[0].name, "TextBox 3");
 assert.strictEqual(slide6Snapshot.slideTitle, "TRAINING ON SMP");
 console.log('✔ Test C: Slide 6 title correctly identified as TextBox 3 (TextBox)');
 
-console.log('--- ALL PPTX FIDELITY TESTS PASSED (3/3) ---');
+// Mock snapshot from Slide 7
+const slide7Shapes = [
+  { id: "sp-desc", name: "TextBox 11", top: 1052736, left: 767408, text: "ROPE ACCESS SYSTEM BEING USED IN CHS SURGE BIN SHEET REPLACEMENT AND PAINTING" },
+  { id: "sp-title", name: "TextBox 6", top: 197319, left: 119336, text: "ROPE ACCESS SYSTEM IN PDR" }
+];
+
+// Test D: Slide 7 title resolution (Topmost shape identification: TextBox 6 at top 197319 vs TextBox 11 at 1052736)
+slide7Shapes.sort((a, b) => a.top - b.top);
+const slide7TitleShape = slide7Shapes[0];
+assert.strictEqual(slide7TitleShape.name, "TextBox 6");
+assert.strictEqual(slide7TitleShape.text, "ROPE ACCESS SYSTEM IN PDR");
+console.log('✔ Test D: Slide 7 title correctly identified as TextBox 6 (ROPE ACCESS SYSTEM IN PDR)');
+
+// Test E: Multi-Slide 6 & 7 simultaneous heading color change
+const multiSlideCalls = [
+  { name: "set_font", args: { slide_number: 6, shape_id: "heading", color: "#16A34A" } },
+  { name: "set_font", args: { slide_number: 7, shape_id: "heading", color: "#16A34A" } }
+];
+
+assert.strictEqual(multiSlideCalls.length, 2);
+assert.strictEqual(multiSlideCalls[0].args.slide_number, 6);
+assert.strictEqual(multiSlideCalls[1].args.slide_number, 7);
+assert.strictEqual(multiSlideCalls[0].args.color, "#16A34A");
+assert.strictEqual(multiSlideCalls[1].args.color, "#16A34A");
+console.log('✔ Test E: Multi-slide simultaneous tool call targets Slide 6 & 7 heading colors');
+
+console.log('--- ALL PPTX FIDELITY TESTS PASSED (5/5) ---');

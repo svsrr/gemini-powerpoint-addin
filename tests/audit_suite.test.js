@@ -19,21 +19,30 @@ assert(taskpaneCode.includes("executeSetShapeText"), 'executeSetShapeText must b
 assert(taskpaneCode.includes("executeSetTableCell"), 'executeSetTableCell must be defined');
 assert(taskpaneCode.includes("executeBatchUpdateTable"), 'executeBatchUpdateTable must be defined');
 assert(taskpaneCode.includes("executeDeleteShape"), 'executeDeleteShape must be defined');
+assert(taskpaneCode.includes("executeReadDeckOutline"), 'executeReadDeckOutline must be defined');
 assert(taskpaneCode.includes("runGeminiAgentLoop"), 'runGeminiAgentLoop must be defined');
 console.log('✔ Test 1 Passed: Core functions, role: "function", and clean cell APIs verified in taskpane.js');
 
-// Test 2: Verify Tool Definitions Schema
+// Test 2: Verify Tool Definitions Schema & Multi-Slide Parameterization
 const toolsMatch = taskpaneCode.match(/const GEMINI_AGENT_TOOLS = (\[[\s\S]*?\]);/);
 assert(toolsMatch, 'GEMINI_AGENT_TOOLS must be declared');
 const tools = eval(toolsMatch[1]);
 const declarations = tools[0].functionDeclarations;
 const declNames = declarations.map(d => d.name);
-const expectedTools = ['read_slide', 'set_font', 'set_shape_text', 'set_table_cell', 'batch_update_table', 'add_slide', 'delete_shape'];
+const expectedTools = ['read_deck_outline', 'read_slide', 'set_font', 'set_shape_text', 'set_table_cell', 'batch_update_table', 'add_slide', 'delete_shape', 'undo_last_edit'];
 
 for (const exp of expectedTools) {
   assert(declNames.includes(exp), `Expected tool ${exp} not found in GEMINI_AGENT_TOOLS`);
 }
-console.log(`✔ Test 2 Passed: All ${expectedTools.length} generic agent tools present in GEMINI_AGENT_TOOLS`);
+
+// Verify slide_number parameter is present on all slide editing and reading tools
+const slideNumberTools = ['read_slide', 'set_font', 'set_shape_text', 'set_table_cell', 'batch_update_table', 'delete_shape'];
+for (const toolName of slideNumberTools) {
+  const decl = declarations.find(d => d.name === toolName);
+  assert(decl, `Declaration for ${toolName} must exist`);
+  assert(decl.parameters.properties.slide_number, `Tool ${toolName} must support slide_number parameter`);
+}
+console.log(`✔ Test 2 Passed: All ${expectedTools.length} generic agent tools present with slide_number targeting support`);
 
 // Test 3: Table Selection Logic Simulation (Slide 4 with Table 7 (2x3) and Table 8 (7x3))
 function testTableResolution(shapes, shape_id, updates) {
