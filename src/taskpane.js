@@ -282,278 +282,331 @@ function replaceSelectionInDocument(text) {
   }
 }
 
+// ============================================================================
+// Generic Slide Editing Tools (Called by Gemini Autonomous Agent Loop)
+// ============================================================================
+
 /**
- * DIRECT SLIDE EDITING: Updates font color of matching text and table cells on the active slide.
- * Correctly navigates PowerPoint Table cells using Table.getCellOrNullObject(r, c) and cell.font.color!
+ * Reads all shapes, text boxes, and table cells with their IDs and coordinates on the active slide.
  */
-async function executeChangeTextColor({ searchText = '', newColor = '#000000' }) {
+async function executeReadSlide() {
   if (!state.isPowerPoint || typeof PowerPoint === 'undefined') {
-    showToast(`Simulated: Updated text color to ${newColor}!`);
-    return { success: true, updatedCount: 5 };
+    return {
+      slideTitle: state.currentSlideInfo.title || 'Slide Preview',
+      textShapes: [
+        { id: 'mock-title', name: 'Title', type: 'TextBox', isTitle: true, text: state.currentSlideInfo.title || 'Executive Overview' },
+        { id: 'mock-body', name: 'Body', type: 'TextBox', isTitle: false, text: state.currentSlideInfo.text || '' }
+      ],
+      tables: []
+    };
   }
 
-  let updatedCount = 0;
-
   try {
-    await PowerPoint.run(async (context) => {
+    return await PowerPoint.run(async (context) => {
       const selectedSlides = context.presentation.getSelectedSlides();
       selectedSlides.load('items');
       await context.sync();
+      if (!selectedSlides.items?.length) return { error: 'No slide selected' };
 
-      if (!selectedSlides.items || selectedSlides.items.length === 0) return;
       const slide = selectedSlides.items[0];
       const shapes = slide.shapes;
-      shapes.load('items/type, items/name, items/id');
+      shapes.load('items/id, items/name, items/type, items/top, items/left, items/width, items/height');
       await context.sync();
 
-      const searchLower = (searchText || '').toLowerCase().trim();
-
-      // 1. Separate table shapes and textual shapes
       const tableShapes = shapes.items.filter(s => String(s.type || '').toLowerCase() === 'table');
-      const textualShapes = shapes.items.filter(s => {
-        const t = String(s.type || '').toLowerCase();
-        return ['textbox', 'geometricshape', 'placeholder'].includes(t);
-      });
+      const textualShapes = shapes.items.filter(s =>
+        ['textbox', 'geometricshape', 'placeholder'].includes(String(s.type || '').toLowerCase())
+      );
 
-      // 2. Load tables
+      // Sort textual shapes by top position (topmost is title)
+      textualShapes.sort((a, b) => (a.top || 0) - (b.top || 0));
+
       const loadedTables = [];
-      for (const shape of tableShapes) {
+      for (const s of tableShapes) {
         try {
-          const tbl = shape.getTable();
+          const tbl = s.getTable();
           tbl.load('rowCount, columnCount, values');
-          loadedTables.push(tbl);
+          loadedTables.push({ shapeId: s.id, name: s.name, tbl });
         } catch (err) {
-          console.warn('Could not get table:', err);
+          console.warn('Table load error:', err);
         }
       }
 
-      // 3. Load textframes for textual shapes
-      for (const s of textualShapes) {
-        s.textFrame.load('hasText, textRange/text');
-      }
-
+      textualShapes.forEach(s => s.textFrame.load('hasText, textRange/text, textRange/font/color, textRange/font/size, textRange/font/bold'));
       await context.sync();
 
-      // 4. Update table cells
-      for (const table of loadedTables) {
-        const rowCount = table.rowCount;
-        const colCount = table.columnCount;
-        const values = table.values || [];
+      const textShapeList = [];
+      let slideTitle = '';
 
-        // Detect target column if user mentioned header word (e.g. remarks, status)
-        const targetCols = new Set();
-        if (values.length > 0) {
-          values[0].forEach((headerText, cIdx) => {
-            const h = String(headerText || '').toLowerCase();
-            if (
-              (searchLower.includes('remark') && h.includes('remark')) ||
-              (searchLower.includes('status') && h.includes('status')) ||
-              (searchLower && h.includes(searchLower))
-            ) {
-              targetCols.add(cIdx);
+      for (let i = 0; i < textualShapes.length; i++) {
+        const s = textualShapes[i];
+        if (s.textFrame && s.textFrame.hasText) {
+          const text = s.textFrame.textRange.text?.trim() || '';
+          const isTitle = (i === 0);
+          if (isTitle && !slideTitle) slideTitle = text.split('\n')[0];
+          textShapeList.push({
+            id: s.id,
+            name: s.name,
+            type: s.type,
+            isTitle: isTitle,
+            top: s.top,
+            left: s.left,
+            text: text,
+            font: {
+              color: s.textFrame.textRange.font.color,
+              size: s.textFrame.textRange.font.size,
+              bold: s.textFrame.textRange.font.bold
             }
           });
         }
-
-        for (let r = 0; r < rowCount; r++) {
-          for (let c = 0; c < colCount; c++) {
-            const cellText = (values[r] && values[r][c]) ? String(values[r][c]).trim() : '';
-            const cellLower = cellText.toLowerCase();
-
-            let isMatch = false;
-            if (r === 0 && (searchLower.includes('remark') || searchLower.includes('status') || searchLower.includes('green'))) {
-              isMatch = false; // Keep table header unchanged unless explicitly asked
-            } else if (targetCols.has(c)) {
-              // This column is the targeted column (e.g. Present Status / Remarks)
-              isMatch = true;
-            } else if (!searchText || searchLower === 'all' || searchLower === 'green') {
-              isMatch = (r > 0 && cellText.length > 0) || cellLower.includes('complied') || cellLower.includes('hold') || cellLower.includes('progress');
-            } else if (
-              cellLower.includes(searchLower) ||
-              searchLower.includes(cellLower) ||
-              (searchLower.includes('remark') && (cellLower.includes('complied') || cellLower.includes('hold') || cellLower.includes('progress')))
-            ) {
-              isMatch = true;
-            }
-
-            if (isMatch && cellText.length > 0) {
-              const cell = table.getCellOrNullObject(r, c);
-              cell.font.color = newColor;
-              try {
-                cell.textRuns = [{ text: cellText, font: { color: newColor } }];
-              } catch (runErr) {
-                console.warn('textRuns update error:', runErr);
-              }
-              updatedCount++;
-            }
-          }
-        }
       }
 
-      // 5. Update text boxes / shapes
-      for (const s of textualShapes) {
-        if (s.textFrame && s.textFrame.hasText && s.textFrame.textRange) {
-          const text = s.textFrame.textRange.text?.trim() || '';
-          const textLower = text.toLowerCase();
-          const isMatch = !searchText ||
-            searchLower === 'all' ||
-            searchLower === 'green' ||
-            (searchLower.includes('remark') && (textLower.includes('complied') || textLower.includes('hold'))) ||
-            textLower.includes(searchLower);
-
-          if (isMatch && text.length > 0) {
-            s.textFrame.textRange.font.color = newColor;
-            updatedCount++;
-          }
-        }
+      const tableList = [];
+      for (const item of loadedTables) {
+        tableList.push({
+          shapeId: item.shapeId,
+          name: item.name,
+          rowCount: item.tbl.rowCount,
+          columnCount: item.tbl.columnCount,
+          values: item.tbl.values || []
+        });
       }
 
-      await context.sync();
+      return {
+        slideTitle: slideTitle || 'Active Slide',
+        textShapes: textShapeList,
+        tables: tableList
+      };
     });
-
-    await scanActiveSlide();
-    if (updatedCount > 0) {
-      showToast(`✨ Changed text color to ${newColor} (${updatedCount} items updated directly in slide)!`);
-    }
-    return { success: true, updatedCount };
   } catch (error) {
-    console.error('Error changing color:', error);
-    showToast(`Error changing color: ${error.message}`);
-    return { success: false, error: error.message, updatedCount: 0 };
+    console.error('Error reading slide structure:', error);
+    return { error: error.message };
   }
 }
 
 /**
- * DIRECT SLIDE EDITING: Replaces text inside shapes or table cells on the active slide.
+ * Sets font styling (color, size, bold, italic) on a shape, title, or heading.
  */
-async function executeReplaceSlideText({ findText, replaceText }) {
+async function executeSetFont({ shape_id, color, size, bold, italic }) {
   if (!state.isPowerPoint || typeof PowerPoint === 'undefined') {
-    showToast(`Simulated: Replaced "${findText}" with "${replaceText}"!`);
-    return { success: true, replacedCount: 1 };
+    return { success: true, message: `Simulated: Set font on ${shape_id} (color: ${color || 'unchanged'})` };
   }
 
-  let replacedCount = 0;
+  try {
+    return await PowerPoint.run(async (context) => {
+      const slide = context.presentation.getSelectedSlides().getItemAt(0);
+      const shapes = slide.shapes;
+      shapes.load('items/id, items/name, items/type, items/top');
+      await context.sync();
+
+      const textual = shapes.items.filter(s =>
+        ['textbox', 'geometricshape', 'placeholder'].includes(String(s.type || '').toLowerCase())
+      );
+      textual.sort((a, b) => (a.top || 0) - (b.top || 0));
+
+      let targetShape;
+      const lowerId = (shape_id || '').toLowerCase();
+      if (lowerId === 'heading' || lowerId === 'title' || lowerId === 'slidetitle' || lowerId === 'main') {
+        targetShape = textual[0];
+      } else {
+        targetShape = shapes.items.find(s => s.id === shape_id || s.name === shape_id) || textual[0];
+      }
+
+      if (!targetShape) return { success: false, error: `Shape not found: ${shape_id}` };
+
+      targetShape.textFrame.load('hasText, textRange/font');
+      await context.sync();
+
+      if (color) targetShape.textFrame.textRange.font.color = color;
+      if (size) targetShape.textFrame.textRange.font.size = size;
+      if (bold !== undefined) targetShape.textFrame.textRange.font.bold = bold;
+      if (italic !== undefined) targetShape.textFrame.textRange.font.italic = italic;
+
+      await context.sync();
+      await scanActiveSlide();
+      return { success: true, message: `Updated font formatting on shape "${targetShape.name || targetShape.id}" (color: ${color || 'unchanged'})` };
+    });
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Updates text content of a shape or text box on the active slide.
+ */
+async function executeSetShapeText({ shape_id, text }) {
+  if (!state.isPowerPoint || typeof PowerPoint === 'undefined') {
+    return { success: true, message: `Simulated: Set text on ${shape_id}` };
+  }
 
   try {
-    await PowerPoint.run(async (context) => {
-      const selectedSlides = context.presentation.getSelectedSlides();
-      selectedSlides.load('items');
-      await context.sync();
-      if (!selectedSlides.items || selectedSlides.items.length === 0) return;
-
-      const slide = selectedSlides.items[0];
+    return await PowerPoint.run(async (context) => {
+      const slide = context.presentation.getSelectedSlides().getItemAt(0);
       const shapes = slide.shapes;
-      shapes.load('items/type, items/name, items/id');
+      shapes.load('items/id, items/name, items/type, items/top');
       await context.sync();
 
-      // 1. Separate table shapes and textual shapes
-      const tableShapes = shapes.items.filter(s => String(s.type || '').toLowerCase() === 'table');
-      const textualShapes = shapes.items.filter(s => {
-        const t = String(s.type || '').toLowerCase();
-        return ['textbox', 'geometricshape', 'placeholder'].includes(t);
-      });
+      const textual = shapes.items.filter(s =>
+        ['textbox', 'geometricshape', 'placeholder'].includes(String(s.type || '').toLowerCase())
+      );
+      textual.sort((a, b) => (a.top || 0) - (b.top || 0));
 
-      // 2. Load tables
-      const loadedTables = [];
-      for (const shape of tableShapes) {
-        try {
-          const tbl = shape.getTable();
-          tbl.load('rowCount, columnCount, values');
-          loadedTables.push(tbl);
-        } catch (err) {
-          console.warn(err);
-        }
+      let targetShape;
+      const lowerId = (shape_id || '').toLowerCase();
+      if (lowerId === 'heading' || lowerId === 'title') {
+        targetShape = textual[0];
+      } else {
+        targetShape = shapes.items.find(s => s.id === shape_id || s.name === shape_id) || textual[0];
       }
 
-      // 3. Load textframes for textual shapes
-      for (const s of textualShapes) {
-        s.textFrame.load('hasText, textRange/text');
-      }
+      if (!targetShape) return { success: false, error: `Shape not found: ${shape_id}` };
 
+      targetShape.textFrame.load('hasText, textRange');
       await context.sync();
 
-      // 4. Update tables
-      for (const table of loadedTables) {
-        for (let r = 0; r < table.rowCount; r++) {
-          for (let c = 0; c < table.columnCount; c++) {
-            const cellText = (table.values[r] && table.values[r][c]) ? String(table.values[r][c]) : '';
-            if (cellText && cellText.includes(findText)) {
-              const cell = table.getCellOrNullObject(r, c);
-              cell.text = cellText.replace(new RegExp(escapeRegex(findText), 'g'), replaceText);
-              replacedCount++;
-            }
-          }
-        }
-      }
-
-      // 5. Update shapes
-      for (const s of textualShapes) {
-        if (s.textFrame && s.textFrame.hasText && s.textFrame.textRange && s.textFrame.textRange.text) {
-          if (s.textFrame.textRange.text.includes(findText)) {
-            s.textFrame.textRange.text = s.textFrame.textRange.text.replace(new RegExp(escapeRegex(findText), 'g'), replaceText);
-            replacedCount++;
-          }
-        }
-      }
-
+      targetShape.textFrame.textRange.text = text;
       await context.sync();
+      await scanActiveSlide();
+      return { success: true, message: `Updated text of "${targetShape.name || targetShape.id}"` };
     });
-
-    await scanActiveSlide();
-    showToast(`✨ Replaced "${findText}" with "${replaceText}" (${replacedCount} instances)!`);
-    return { success: true, replacedCount };
   } catch (e) {
-    showToast(`Error replacing text: ${e.message}`);
-    return { success: false, error: e.message, replacedCount: 0 };
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Updates text and/or color of a specific table cell at [row, col].
+ */
+async function executeSetTableCell({ shape_id, row, col, text, font_color, fill_color }) {
+  if (!state.isPowerPoint || typeof PowerPoint === 'undefined') {
+    return { success: true, message: `Simulated: Set cell [${row}, ${col}]` };
+  }
+
+  try {
+    return await PowerPoint.run(async (context) => {
+      const slide = context.presentation.getSelectedSlides().getItemAt(0);
+      const shapes = slide.shapes;
+      shapes.load('items/id, items/name, items/type');
+      await context.sync();
+
+      let tableShape;
+      if (shape_id) {
+        tableShape = shapes.items.find(s => (s.id === shape_id || s.name === shape_id) && String(s.type || '').toLowerCase() === 'table');
+      }
+      if (!tableShape) {
+        tableShape = shapes.items.find(s => String(s.type || '').toLowerCase() === 'table');
+      }
+
+      if (!tableShape) return { success: false, error: 'No table found on slide' };
+
+      const table = tableShape.getTable();
+      table.load('rowCount, columnCount, values');
+      await context.sync();
+
+      if (row < 0 || row >= table.rowCount || col < 0 || col >= table.columnCount) {
+        return { success: false, error: `Cell [${row}, ${col}] out of bounds (Table is ${table.rowCount}x${table.columnCount})` };
+      }
+
+      const cell = table.getCellOrNullObject(row, col);
+      if (text !== undefined) cell.text = text;
+      if (font_color) {
+        cell.font.color = font_color;
+        try {
+          const currentText = text !== undefined ? text : ((table.values[row] && table.values[row][col]) || '');
+          cell.textRuns = [{ text: currentText, font: { color: font_color } }];
+        } catch (e) {}
+      }
+      if (fill_color) {
+        cell.fill.setSolidColor(fill_color);
+      }
+
+      await context.sync();
+      return { success: true, message: `Updated cell [${row}, ${col}] (text: ${text || 'unchanged'}, color: ${font_color || 'unchanged'})` };
+    });
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Batch updates multiple table cells (e.g. recoloring a whole column or status values).
+ */
+async function executeBatchUpdateTable({ shape_id, updates = [] }) {
+  if (!state.isPowerPoint || typeof PowerPoint === 'undefined') {
+    return { success: true, updatedCount: updates.length };
+  }
+
+  try {
+    return await PowerPoint.run(async (context) => {
+      const slide = context.presentation.getSelectedSlides().getItemAt(0);
+      const shapes = slide.shapes;
+      shapes.load('items/id, items/name, items/type');
+      await context.sync();
+
+      let tableShape = shapes.items.find(s => String(s.type || '').toLowerCase() === 'table');
+      if (!tableShape) return { success: false, error: 'No table found on active slide' };
+
+      const table = tableShape.getTable();
+      table.load('rowCount, columnCount, values');
+      await context.sync();
+
+      let count = 0;
+      for (const up of updates) {
+        const { row, col, text, font_color, fill_color } = up;
+        if (row >= 0 && row < table.rowCount && col >= 0 && col < table.columnCount) {
+          const cell = table.getCellOrNullObject(row, col);
+          if (text !== undefined) cell.text = text;
+          if (font_color) {
+            cell.font.color = font_color;
+            try {
+              const currentText = text !== undefined ? text : ((table.values[row] && table.values[row][col]) || '');
+              cell.textRuns = [{ text: currentText, font: { color: font_color } }];
+            } catch (e) {}
+          }
+          if (fill_color) cell.fill.setSolidColor(fill_color);
+          count++;
+        }
+      }
+
+      await context.sync();
+      await scanActiveSlide();
+      return { success: true, updatedCount: count };
+    });
+  } catch (e) {
+    return { success: false, error: e.message, updatedCount: 0 };
+  }
+}
+
+/**
+ * Deletes a shape from the active slide by shape ID.
+ */
+async function executeDeleteShape({ shape_id }) {
+  if (!state.isPowerPoint || typeof PowerPoint === 'undefined') {
+    return { success: true, message: `Simulated: Deleted shape ${shape_id}` };
+  }
+
+  try {
+    return await PowerPoint.run(async (context) => {
+      const slide = context.presentation.getSelectedSlides().getItemAt(0);
+      const shapes = slide.shapes;
+      shapes.load('items/id, items/name');
+      await context.sync();
+
+      const shape = shapes.items.find(s => s.id === shape_id || s.name === shape_id);
+      if (!shape) return { success: false, error: `Shape not found: ${shape_id}` };
+
+      shape.delete();
+      await context.sync();
+      await scanActiveSlide();
+      return { success: true, message: `Deleted shape ${shape_id}` };
+    });
+  } catch (e) {
+    return { success: false, error: e.message };
   }
 }
 
 function escapeRegex(string) {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/**
- * Accurately extracts the target hex color from natural user sentences like:
- * "change color of the remarks text to black instead of green" -> "#000000"
- */
-function extractTargetColor(text) {
-  const lower = (text || '').toLowerCase();
-  const map = {
-    black: '#000000',
-    red: '#DC2626',
-    blue: '#2563EB',
-    green: '#16A34A',
-    emerald: '#059669',
-    white: '#FFFFFF',
-    gray: '#4B5563',
-    grey: '#4B5563',
-    orange: '#EA580C',
-    yellow: '#CA8A04',
-    purple: '#7C3AED'
-  };
-  
-  // 1. Check 'to <color>', 'into <color>', 'with <color>' (e.g. 'to black instead of green')
-  const toMatch = lower.match(/(?:to|into|with)\s+(#?[a-z0-9]+)/i);
-  if (toMatch) {
-    const c = toMatch[1].trim();
-    if (map[c]) return map[c];
-    if (c.startsWith('#')) return c;
-  }
-
-  // 2. Check 'make/turn/recolor ... <targetColor>'
-  const actionMatch = lower.match(/(?:make|turn|recolor)\s+.*?\b(black|white|red|blue|green|gray|grey|emerald)\b(?:\s+(?:instead|from|rather)|\s*$)/i);
-  if (actionMatch) {
-    if (map[actionMatch[1]]) return map[actionMatch[1]];
-  }
-
-  // 3. Contextual checks: if user explicitly wants black (e.g. 'black instead of green' or 'turn remarks black')
-  if (lower.includes('black')) return '#000000';
-  if (lower.includes('red') && !lower.includes('instead of red')) return '#DC2626';
-  if (lower.includes('blue') && !lower.includes('instead of blue')) return '#2563EB';
-  if (lower.includes('white') && !lower.includes('instead of white')) return '#FFFFFF';
-  if (lower.includes('green') && !lower.includes('instead of green') && !lower.includes('from green')) return '#16A34A';
-
-  return '#000000';
 }
 
 // ============================================================================
@@ -779,6 +832,121 @@ async function insertSlideIntoPowerPoint(slideData) {
  * Calls Google AI Studio Gemini API endpoint directly from client.
  * Uses 'x-goog-api-key' header for security (no keys in URL query string).
  */
+// ============================================================================
+// Secure Google Gemini API Client & Autonomous Agent Loop
+// ============================================================================
+
+const GEMINI_AGENT_TOOLS = [
+  {
+    functionDeclarations: [
+      {
+        name: "read_slide",
+        description: "Reads all shapes, text boxes, and table cells with their IDs, names, coordinates, and current text on the active slide.",
+        parameters: { type: "OBJECT", properties: {} }
+      },
+      {
+        name: "set_font",
+        description: "Sets font styling (color, size, bold, italic) on a shape, title, or heading on the active slide.",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            shape_id: { type: "STRING", description: "ID or name of shape, or 'heading' / 'title' for the slide title" },
+            color: { type: "STRING", description: "Hex color code e.g. #EA580C (orange), #000000 (black), #2563EB (blue), #16A34A (green)" },
+            size: { type: "NUMBER", description: "Font size in points" },
+            bold: { type: "BOOLEAN", description: "Bold formatting" },
+            italic: { type: "BOOLEAN", description: "Italic formatting" }
+          },
+          required: ["shape_id"]
+        }
+      },
+      {
+        name: "set_shape_text",
+        description: "Updates or rewrites text content of a shape or text box on the active slide.",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            shape_id: { type: "STRING", description: "Shape ID or name, or 'heading' / 'title'" },
+            text: { type: "STRING", description: "New text content" }
+          },
+          required: ["shape_id", "text"]
+        }
+      },
+      {
+        name: "set_table_cell",
+        description: "Updates text and/or color of a specific table cell at [row, col].",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            shape_id: { type: "STRING", description: "Table shape ID (optional if only 1 table on slide)" },
+            row: { type: "INTEGER", description: "Zero-based row index (0 = header row)" },
+            col: { type: "INTEGER", description: "Zero-based column index" },
+            text: { type: "STRING", description: "Optional updated cell text" },
+            font_color: { type: "STRING", description: "Hex color for cell text (e.g. #000000 for black)" },
+            fill_color: { type: "STRING", description: "Hex color for cell background" }
+          },
+          required: ["row", "col"]
+        }
+      },
+      {
+        name: "batch_update_table",
+        description: "Batch updates multiple table cells at once (e.g. recoloring a whole column or status values).",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            shape_id: { type: "STRING", description: "Table shape ID" },
+            updates: {
+              type: "ARRAY",
+              items: {
+                type: "OBJECT",
+                properties: {
+                  row: { type: "INTEGER", description: "Row index" },
+                  col: { type: "INTEGER", description: "Column index" },
+                  text: { type: "STRING", description: "New text (optional)" },
+                  font_color: { type: "STRING", description: "Font color hex (optional)" },
+                  fill_color: { type: "STRING", description: "Fill color hex (optional)" }
+                },
+                required: ["row", "col"]
+              }
+            }
+          },
+          required: ["updates"]
+        }
+      },
+      {
+        name: "add_slide",
+        description: "Creates and inserts a new formatted slide into the presentation.",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            title: { type: "STRING", description: "Slide Title" },
+            subtitle: { type: "STRING", description: "Subtitle/category" },
+            layout: { type: "STRING", enum: ["cards", "bullet-list", "problem-solution", "timeline", "stat-callout"] },
+            items: { type: "ARRAY", items: { type: "OBJECT", properties: { heading: { type: "STRING" }, description: { type: "STRING" } } } },
+            bullets: { type: "ARRAY", items: { type: "STRING" } },
+            takeaway: { type: "STRING", description: "Executive takeaway" },
+            theme: { type: "STRING" }
+          },
+          required: ["title"]
+        }
+      },
+      {
+        name: "delete_shape",
+        description: "Deletes a shape from the active slide by shape ID.",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            shape_id: { type: "STRING", description: "ID of shape to delete" }
+          },
+          required: ["shape_id"]
+        }
+      }
+    ]
+  }
+];
+
+/**
+ * Standard single-turn helper for Create and Refine tabs (with schema or custom prompts).
+ */
 async function callGeminiApi({ prompt, contents, systemInstruction, jsonSchema = null, temperature = 0.7 }) {
   if (!state.apiKey) {
     openSettingsModal();
@@ -787,23 +955,8 @@ async function callGeminiApi({ prompt, contents, systemInstruction, jsonSchema =
   }
 
   const model = state.model || 'gemini-3.8-flash';
-  // Send key via header, NOT query parameter
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
-  let fullSystemInstruction = `You are Gemini Copilot, an elite AI presentation designer embedded directly inside Microsoft PowerPoint.
-IMPORTANT: You have DIRECT ACCESS TO EDIT AND REFORMAT THE ACTIVE SLIDE using function calling tools.
-When the user asks to modify text, change colors (e.g. "change color of remarks to black"), replace words, or style table cells:
-DO NOT output generic tutorials, manual step-by-step instructions, or VBA macro code!
-INSTEAD, IMMEDIATELY call the appropriate tool (change_text_color or replace_slide_text) to execute the modification directly on their slide.`;
-
-  if (state.customInstructions) {
-    fullSystemInstruction += `\n\nUser Directives: ${state.customInstructions}`;
-  }
-  if (systemInstruction) {
-    fullSystemInstruction += `\n\nTask Directive: ${systemInstruction}`;
-  }
-
-  // Multi-turn contents array or single turn
   const requestContents = contents || [
     {
       role: 'user',
@@ -811,49 +964,9 @@ INSTEAD, IMMEDIATELY call the appropriate tool (change_text_color or replace_sli
     }
   ];
 
-  const GEMINI_TOOLS = [
-    {
-      functionDeclarations: [
-        {
-          name: "change_text_color",
-          description: "DIRECTLY changes the font color of text boxes or table cells on the active PowerPoint slide (e.g. change remarks text from green to black).",
-          parameters: {
-            type: "OBJECT",
-            properties: {
-              search_text: {
-                type: "STRING",
-                description: "The text to target (e.g. 'Complied', 'Job on hold', 'remarks', 'green', or 'all')."
-              },
-              color_hex: {
-                type: "STRING",
-                description: "The new hex color to apply (e.g. '#000000' for black, '#2563EB' for blue)."
-              }
-            },
-            required: ["color_hex"]
-          }
-        },
-        {
-          name: "replace_slide_text",
-          description: "DIRECTLY finds and replaces text inside any shape or table cell on the active slide.",
-          parameters: {
-            type: "OBJECT",
-            properties: {
-              find_text: { type: "STRING", description: "Text to find" },
-              replace_text: { type: "STRING", description: "Replacement text" }
-            },
-            required: ["find_text", "replace_text"]
-          }
-        }
-      ]
-    }
-  ];
-
   const requestBody = {
     contents: requestContents,
-    systemInstruction: {
-      parts: [{ text: fullSystemInstruction }]
-    },
-    ...(!jsonSchema ? { tools: GEMINI_TOOLS } : {}),
+    ...(systemInstruction ? { systemInstruction: { parts: [{ text: systemInstruction }] } } : {}),
     generationConfig: {
       temperature: temperature,
       maxOutputTokens: 4096,
@@ -864,7 +977,95 @@ INSTEAD, IMMEDIATELY call the appropriate tool (change_text_color or replace_sli
     }
   };
 
-  try {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': state.apiKey
+    },
+    body: JSON.stringify(requestBody)
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error?.message || `HTTP ${response.status}: ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  const text = data.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('');
+  if (!text) throw new Error('No content returned by Gemini.');
+  return text;
+}
+
+/**
+ * Autonomous Gemini Agent Loop for PowerPoint Copilot Chat.
+ * Reads fresh slide state, executes function calls in a loop, and reports back.
+ */
+async function runGeminiAgentLoop(userMessage, onUpdate) {
+  if (!state.apiKey) {
+    openSettingsModal();
+    showToast('Please enter your Google AI Studio API key');
+    throw new Error('API Key missing');
+  }
+
+  // 1. Fresh read of current slide
+  const slideSnapshot = await executeReadSlide();
+
+  const model = state.model || 'gemini-3.8-flash';
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+  let baseInstruction = `You are Gemini Copilot, an elite AI presentation assistant embedded inside Microsoft PowerPoint.
+You have FULL DIRECT CONTROL to read, modify, format, and structure the user's active PowerPoint slide using function calling tools.
+
+Current Slide Snapshot:
+${JSON.stringify(slideSnapshot, null, 2)}
+
+Directives:
+1. When asked to modify or style the slide (e.g. "change heading color to orange", "change remarks text to black instead of green", "shorten text", "make header blue", "add a slide"):
+   DO NOT output generic tutorial instructions, manual steps, or VBA macro code!
+   IMMEDIATELY call the appropriate tool(s).
+2. For slide titles / headings, use set_font(shape_id="heading", color="#...") or the specific title shape ID from the snapshot.
+3. For table cells, use set_table_cell or batch_update_table with the exact row and column indices.
+4. When tools complete, summarize clearly and concisely what was directly modified on the slide.`;
+
+  if (state.customInstructions) {
+    baseInstruction += `\n\nUser Custom Persona: ${state.customInstructions}`;
+  }
+
+  // Multi-turn contents: preserve previous conversation turns + new user message
+  const contents = [...state.chatHistory];
+  contents.push({
+    role: 'user',
+    parts: [{ text: userMessage }]
+  });
+
+  const TOOL_HANDLERS = {
+    read_slide: async () => await executeReadSlide(),
+    set_font: async (args) => await executeSetFont(args),
+    set_shape_text: async (args) => await executeSetShapeText(args),
+    set_table_cell: async (args) => await executeSetTableCell(args),
+    batch_update_table: async (args) => await executeBatchUpdateTable(args),
+    add_slide: async (args) => {
+      await insertSlideIntoPowerPoint(args);
+      return { success: true, message: `Created and inserted new slide: ${args.title}` };
+    },
+    delete_shape: async (args) => await executeDeleteShape(args)
+  };
+
+  // Agent loop: up to 6 iterations for multi-step tool calls
+  for (let iter = 0; iter < 6; iter++) {
+    const requestBody = {
+      contents,
+      systemInstruction: {
+        parts: [{ text: baseInstruction }]
+      },
+      tools: GEMINI_AGENT_TOOLS,
+      generationConfig: {
+        temperature: 0.2,
+        maxOutputTokens: 4096
+      }
+    };
+
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -875,87 +1076,60 @@ INSTEAD, IMMEDIATELY call the appropriate tool (change_text_color or replace_sli
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      const msg = errorData.error?.message || `HTTP ${response.status}: ${response.statusText}`;
-
-      // Auto-fallback if the previously selected model was deprecated
-      if ((msg.includes('no longer available') || msg.includes('not found')) && model !== 'gemini-3.8-flash') {
-        console.warn(`Model ${model} deprecated, switching automatically to gemini-3.8-flash...`);
-        state.model = 'gemini-3.8-flash';
-        localStorage.setItem('gemini_model', 'gemini-3.8-flash');
-        const tag = document.getElementById('model-tag');
-        if (tag) tag.textContent = 'gemini-3.8-flash';
-
-        const retryRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-goog-api-key': state.apiKey
-          },
-          body: JSON.stringify(requestBody)
-        });
-
-        if (retryRes.ok) {
-          const retryData = await retryRes.json();
-          const candidate = retryData.candidates?.[0];
-          const textParts = candidate?.content?.parts?.map(p => p.text || '').join('');
-          if (textParts) return textParts;
-        }
-      }
-
-      throw new Error(msg);
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.error?.message || `HTTP ${response.status}: ${response.statusText}`);
     }
 
     const data = await response.json();
     const candidate = data.candidates?.[0];
+    const parts = candidate?.content?.parts || [];
+    const functionCalls = parts.filter(p => p.functionCall);
 
-    // Check if Gemini returned a Function Call to edit the slide directly!
-    const functionCall = candidate?.content?.parts?.find(p => p.functionCall)?.functionCall;
-    if (functionCall) {
-      if (functionCall.name === 'change_text_color') {
-        const color = functionCall.args.color_hex || '#000000';
-        const search = functionCall.args.search_text || 'remarks';
-        const res = await executeChangeTextColor({ searchText: search, newColor: color });
-        if (res.success && res.updatedCount > 0) {
-          return `✅ **Directly applied to your slide!** I updated the font color to \`${color}\` across ${res.updatedCount} items in your slide table/shapes.`;
-        } else {
-          return `⚠️ I tried to change the font color to \`${color}\`, but found no matching items (0 updated). Please ensure the slide is selected or use the Refine tab.`;
+    if (functionCalls.length === 0) {
+      // Model produced final confirmation text
+      const finalText = parts.map(p => p.text || '').join('');
+      // Save multi-turn conversation memory
+      state.chatHistory.push({ role: 'user', parts: [{ text: userMessage }] });
+      state.chatHistory.push({ role: 'model', parts: [{ text: finalText }] });
+      return finalText;
+    }
+
+    // Append model turn with function calls
+    contents.push({ role: 'model', parts });
+
+    // Execute all function calls
+    const toolResponses = [];
+    for (const part of functionCalls) {
+      const fc = part.functionCall;
+      if (onUpdate) onUpdate(`Applying ${fc.name}...`);
+      const handler = TOOL_HANDLERS[fc.name];
+      let result;
+      if (handler) {
+        try {
+          result = await handler(fc.args);
+        } catch (e) {
+          result = { success: false, error: e.message };
         }
+      } else {
+        result = { success: false, error: `Unknown tool: ${fc.name}` };
       }
-      if (functionCall.name === 'replace_slide_text') {
-        const res = await executeReplaceSlideText({
-          findText: functionCall.args.find_text,
-          replaceText: functionCall.args.replace_text
-        });
-        if (res.success && res.replacedCount > 0) {
-          return `✅ **Directly applied to your slide!** Replaced "${functionCall.args.find_text}" with "${functionCall.args.replace_text}" (${res.replacedCount} instances).`;
-        } else {
-          return `⚠️ I searched for "${functionCall.args.find_text}" on this slide, but found no matching instances to replace.`;
+      toolResponses.push({
+        functionResponse: {
+          name: fc.name,
+          response: { result }
         }
-      }
+      });
     }
 
-    if (candidate?.finishReason && candidate.finishReason !== 'STOP') {
-      console.warn('Gemini response finishReason:', candidate.finishReason);
-      if (candidate.finishReason === 'SAFETY') {
-        throw new Error('Response blocked by Gemini safety filters.');
-      }
-    }
-
-    const outputText = candidate?.content?.parts?.map(p => p.text || '').join('');
-    if (!outputText) {
-      throw new Error('No content returned by Gemini.');
-    }
-
-    return outputText;
-  } catch (error) {
-    console.error('Gemini API Error:', error);
-    throw error;
+    // Append tool outputs as user turn for next iteration
+    contents.push({ role: 'user', parts: toolResponses });
   }
+
+  return "✅ Actions completed directly on your slide.";
 }
 
 // ============================================================================
-// Multi-Turn Copilot Chat (With Memory & Follow-up Context)
+// Multi-Turn Copilot Chat (Powered by Autonomous Agent Loop)
 // ============================================================================
 
 async function handleSendChatMessage() {
@@ -968,67 +1142,17 @@ async function handleSendChatMessage() {
   inputEl.value = '';
   inputEl.style.height = 'auto';
 
-  // Inject current slide context if toggle checked
-  const includeContext = document.getElementById('include-context-toggle')?.checked;
-  let turnText = userText;
-
-  if (includeContext && state.currentSlideInfo.text) {
-    turnText = `[Current Slide Table/Text: "${state.currentSlideInfo.text}"]\n\nUser Request: ${userText}`;
-  }
-
-  // Direct Action Intent Detection: If user asks to change remarks/text color
-  const lowerUserText = userText.toLowerCase();
-  const isColorChangeIntent = (lowerUserText.includes('color') || lowerUserText.includes('turn') || lowerUserText.includes('make')) &&
-    (lowerUserText.includes('black') || lowerUserText.includes('green') || lowerUserText.includes('red') || lowerUserText.includes('blue') || lowerUserText.includes('white'));
-  
-  const loadingBubble = appendChatMessage('assistant', 'Modifying slide in PowerPoint...', true);
-
-  if (isColorChangeIntent) {
-    const targetColor = extractTargetColor(userText);
-    const colorName = targetColor === '#000000' ? 'black' : targetColor;
-
-    let targetSearch = 'remarks';
-    if (lowerUserText.includes('status')) targetSearch = 'status';
-    else if (lowerUserText.includes('all')) targetSearch = 'all';
-
-    // Directly execute the change in PowerPoint immediately!
-    const res = await executeChangeTextColor({
-      searchText: targetSearch,
-      newColor: targetColor
-    });
-    
-    if (res.success && res.updatedCount > 0) {
-      const successMsg = `✅ **Directly applied to your slide!** I changed the font color of ${res.updatedCount} remark/status items to **${colorName}** (\`${targetColor}\`) directly inside the table on this slide.`;
-      state.chatHistory.push({ role: 'user', parts: [{ text: userText }] });
-      state.chatHistory.push({ role: 'model', parts: [{ text: successMsg }] });
-      updateAssistantBubble(loadingBubble, successMsg);
-      return;
-    }
-  }
-
-  // Append user message to multi-turn conversation memory
-  state.chatHistory.push({
-    role: 'user',
-    parts: [{ text: turnText }]
-  });
+  const loadingBubble = appendChatMessage('assistant', 'Inspecting slide & planning action...', true);
 
   try {
-    const responseText = await callGeminiApi({
-      contents: state.chatHistory,
-      temperature: 0.7
-    });
-
-    // Save assistant reply to memory for seamless follow-ups ("make it shorter", etc.)
-    state.chatHistory.push({
-      role: 'model',
-      parts: [{ text: responseText }]
+    const responseText = await runGeminiAgentLoop(userText, (statusMsg) => {
+      const contentEl = loadingBubble?.querySelector('.bubble-content');
+      if (contentEl) contentEl.innerHTML = `<div class="pulse-indicator"></div> ${escapeHtml(statusMsg)}`;
     });
 
     updateAssistantBubble(loadingBubble, responseText);
   } catch (error) {
-    // Pop failed user turn from memory
-    state.chatHistory.pop();
-    updateAssistantBubble(loadingBubble, `⚠️ **Error calling Gemini API**: ${error.message}\n\nPlease check your API key in Settings.`);
+    updateAssistantBubble(loadingBubble, `⚠️ **Error calling Gemini API**: ${error.message}\n\nPlease verify your API key in Settings.`);
   }
 }
 
