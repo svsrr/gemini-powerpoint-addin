@@ -13,6 +13,54 @@ const getInitialModel = () => {
   return m;
 };
 
+// Theme Color Palettes (Applied to generated slide shapes)
+const THEMES = {
+  'modern-blue': {
+    name: 'Modern Blue & Indigo',
+    titleColor: '#0F172A',
+    subtitleColor: '#2563EB',
+    cardBg: '#F8FAFC',
+    cardBorder: '#BFDBFE',
+    headingColor: '#1D4ED8',
+    textColor: '#334155',
+    takeawayColor: '#1E40AF',
+    accent: '#2563EB'
+  },
+  'emerald-green': {
+    name: 'Emerald Growth',
+    titleColor: '#064E3B',
+    subtitleColor: '#059669',
+    cardBg: '#F0FDF4',
+    cardBorder: '#A7F3D0',
+    headingColor: '#047857',
+    textColor: '#1F2937',
+    takeawayColor: '#065F46',
+    accent: '#10B981'
+  },
+  'dark-slate': {
+    name: 'Executive Dark Slate',
+    titleColor: '#0F172A',
+    subtitleColor: '#64748B',
+    cardBg: '#F1F5F9',
+    cardBorder: '#CBD5E1',
+    headingColor: '#0F172A',
+    textColor: '#334155',
+    takeawayColor: '#334155',
+    accent: '#0284C7'
+  },
+  'coral-accent': {
+    name: 'Warm Coral',
+    titleColor: '#7F1D1D',
+    subtitleColor: '#DC2626',
+    cardBg: '#FFF5F5',
+    cardBorder: '#FECACA',
+    headingColor: '#B91C1C',
+    textColor: '#374151',
+    takeawayColor: '#991B1B',
+    accent: '#EF4444'
+  }
+};
+
 const state = {
   apiKey: localStorage.getItem('gemini_api_key') || '',
   model: getInitialModel(),
@@ -25,8 +73,9 @@ const state = {
     text: '',
     shapeCount: 0
   },
-  chatHistory: [],
-  lastGeneratedSlide: null
+  chatHistory: [], // Full multi-turn conversation memory: [{ role: 'user'|'model', parts: [{ text }] }]
+  lastGeneratedSlide: null,
+  lastGeneratedNotes: ''
 };
 
 // ============================================================================
@@ -58,32 +107,32 @@ window.addEventListener('DOMContentLoaded', () => {
 
 function setConnectionStatus(isConnected, message) {
   const statusEl = document.getElementById('office-status');
+  if (!statusEl) return;
   const dotEl = statusEl.querySelector('.status-dot');
   statusEl.title = message;
   
-  if (isConnected) {
-    dotEl.className = 'status-dot online';
-  } else {
-    dotEl.className = 'status-dot';
+  if (dotEl) {
+    dotEl.className = isConnected ? 'status-dot online' : 'status-dot';
   }
 }
 
 function simulateBrowserContext() {
   state.currentSlideInfo = {
     index: 1,
-    title: 'Demo Presentation: AI in Enterprise Strategy',
-    text: 'Key Drivers: Operational agility, automated workflows, intelligent decision making. Challenges: Legacy migration and data quality.',
-    shapeCount: 2
+    title: 'Executive AI Strategy Overview',
+    text: 'Key Priorities: Accelerate enterprise workflows, maintain zero-loss data governance, and scale agentic intelligence across global business units.',
+    shapeCount: 3
   };
   updateSlideContextBadge();
 }
 
 // ============================================================================
-// PowerPoint Integration (Office.js API)
+// Robust Slide Scanning & Office.js Helper Methods
 // ============================================================================
 
 /**
- * Reads text and structure from the currently active slide in PowerPoint.
+ * Reads text and structure safely from the currently active slide.
+ * Avoids throwing on non-text shapes (images, lines, groups).
  */
 async function scanActiveSlide() {
   if (!state.isPowerPoint || typeof PowerPoint === 'undefined') {
@@ -92,7 +141,7 @@ async function scanActiveSlide() {
   }
 
   const labelEl = document.getElementById('active-slide-label');
-  labelEl.textContent = 'Scanning slide...';
+  if (labelEl) labelEl.textContent = 'Scanning slide...';
 
   try {
     await PowerPoint.run(async (context) => {
@@ -101,33 +150,39 @@ async function scanActiveSlide() {
       await context.sync();
 
       if (!selectedSlides.items || selectedSlides.items.length === 0) {
-        labelEl.textContent = 'No slide selected';
+        if (labelEl) labelEl.textContent = 'No slide selected';
         return;
       }
 
       const slide = selectedSlides.items[0];
       const shapes = slide.shapes;
-      shapes.load('items/textFrame/textRange/text, items/name, items/id');
+      shapes.load('items/type, items/name, items/id, items/hasTextFrame');
       await context.sync();
 
       let extractedTexts = [];
       let slideTitle = '';
 
       for (const shape of shapes.items) {
-        if (shape.textFrame && shape.textFrame.textRange && shape.textFrame.textRange.text) {
-          const text = shape.textFrame.textRange.text.trim();
-          if (text) {
-            extractedTexts.push(text);
-            if (!slideTitle) {
-              slideTitle = text.split('\n')[0];
+        try {
+          if (shape.hasTextFrame) {
+            shape.textFrame.load('textRange/text');
+            await context.sync();
+            const text = shape.textFrame.textRange.text?.trim();
+            if (text) {
+              extractedTexts.push(text);
+              if (!slideTitle) {
+                slideTitle = text.split('\n')[0].replace(/^[#*•\s]+/, '');
+              }
             }
           }
+        } catch {
+          // Gracefully skip shapes that do not support textRange
         }
       }
 
       state.currentSlideInfo = {
         index: 1,
-        title: slideTitle || 'Current Slide',
+        title: slideTitle || 'Active Slide',
         text: extractedTexts.join('\n\n'),
         shapeCount: shapes.items.length
       };
@@ -136,19 +191,39 @@ async function scanActiveSlide() {
     });
   } catch (error) {
     console.warn('Could not read slide via Office.js:', error);
-    labelEl.textContent = 'Slide detected (ready)';
+    if (labelEl) labelEl.textContent = 'Slide detected (ready)';
   }
 }
 
 function updateSlideContextBadge() {
   const labelEl = document.getElementById('active-slide-label');
+  if (!labelEl) return;
   if (state.currentSlideInfo.text) {
     const preview = state.currentSlideInfo.title || 'Slide with text';
     const truncated = preview.length > 28 ? preview.substring(0, 26) + '...' : preview;
-    labelEl.textContent = `Active: ${truncated} (${state.currentSlideInfo.shapeCount} items)`;
+    labelEl.textContent = `Active: ${truncated} (${state.currentSlideInfo.shapeCount} shapes)`;
   } else {
     labelEl.textContent = 'Active slide: Empty or no text detected';
   }
+}
+
+/**
+ * Gets exact highlighted/selected text from PowerPoint document.
+ */
+function getSelectedTextFromDocument() {
+  return new Promise((resolve) => {
+    if (typeof Office !== 'undefined' && Office.context && Office.context.document) {
+      Office.context.document.getSelectedDataAsync(Office.CoercionType.Text, (result) => {
+        if (result.status === Office.AsyncResultStatus.Succeeded && result.value && String(result.value).trim()) {
+          resolve(String(result.value).trim());
+        } else {
+          resolve(null);
+        }
+      });
+    } else {
+      resolve(null);
+    }
+  });
 }
 
 /**
@@ -173,124 +248,164 @@ function replaceSelectionInDocument(text) {
   }
 }
 
+// ============================================================================
+// Full 16:9 Widescreen (960 x 540 pt) Slide Insertion & Layout Engine
+// ============================================================================
+
 /**
- * Inserts a fully designed slide with Title, subtitle, and styled content cards or bullets.
+ * Inserts a newly designed 16:9 widescreen slide into PowerPoint.
+ * Cleans out default empty placeholders and applies the chosen visual theme.
  */
 async function insertSlideIntoPowerPoint(slideData) {
   if (!state.isPowerPoint || typeof PowerPoint === 'undefined') {
-    showToast('Simulated: Slide added in preview mode!');
+    showToast('Simulated: Slide added in browser preview mode!');
     return;
   }
 
+  // Widescreen 16:9 standard dimensions in points
+  const SLIDE_WIDTH = 960;
+  const SLIDE_HEIGHT = 540;
+  const MARGIN_LEFT = 60;
+  const CONTENT_WIDTH = SLIDE_WIDTH - (MARGIN_LEFT * 2); // 840 pt
+
+  const themeKey = slideData.theme || document.getElementById('slide-theme-select')?.value || 'modern-blue';
+  const theme = THEMES[themeKey] || THEMES['modern-blue'];
+
   try {
     await PowerPoint.run(async (context) => {
-      // 1. Add a new blank slide
       const slides = context.presentation.slides;
       const newSlide = slides.add();
 
-      // Standard 16:9 presentation dimensions (points): 960 x 540 or 720 x 405
-      // PowerPoint default width is approx 960pt, height 540pt (or 720x405)
-      const slideWidth = 720;
-      const slideHeight = 405;
+      // Clean out default template ghost placeholders ("Click to add title")
+      newSlide.shapes.load('items');
+      await context.sync();
+      for (const shape of newSlide.shapes.items) {
+        shape.delete();
+      }
+      await context.sync();
 
-      // 2. Add Title Box
-      const titleLeft = 40;
-      const titleTop = 30;
-      const titleWidth = slideWidth - 80;
-      const titleHeight = 50;
-
-      const titleShape = newSlide.shapes.addTextBox(slideData.title || 'Untitled Slide', {
-        left: titleLeft,
-        top: titleTop,
-        width: titleWidth,
-        height: titleHeight
+      // 1. Title Box
+      const titleShape = newSlide.shapes.addTextBox(slideData.title || 'Executive Presentation', {
+        left: MARGIN_LEFT,
+        top: 40,
+        width: CONTENT_WIDTH,
+        height: 55
       });
-      titleShape.textFrame.textRange.font.size = 24;
+      titleShape.textFrame.textRange.font.size = 28;
       titleShape.textFrame.textRange.font.bold = true;
-      titleShape.textFrame.textRange.font.color = '#0F172A';
+      titleShape.textFrame.textRange.font.color = theme.titleColor;
 
-      // 3. Add Subtitle or Category pill if provided
+      // 2. Subtitle / Category
       if (slideData.subtitle) {
-        const subShape = newSlide.shapes.addTextBox(slideData.subtitle, {
-          left: titleLeft,
-          top: titleTop + 45,
-          width: titleWidth,
-          height: 30
+        const subShape = newSlide.shapes.addTextBox(slideData.subtitle.toUpperCase(), {
+          left: MARGIN_LEFT,
+          top: 98,
+          width: CONTENT_WIDTH,
+          height: 25
         });
-        subShape.textFrame.textRange.font.size = 13;
-        subShape.textFrame.textRange.font.color = '#2563EB';
+        subShape.textFrame.textRange.font.size = 12;
+        subShape.textFrame.textRange.font.bold = true;
+        subShape.textFrame.textRange.font.color = theme.subtitleColor;
       }
 
-      // 4. Content cards or bullet points
-      if (slideData.items && slideData.items.length > 0) {
-        const count = Math.min(slideData.items.length, 3);
-        const cardGap = 16;
-        const totalGap = cardGap * (count - 1);
-        const cardWidth = (titleWidth - totalGap) / count;
-        const cardTop = titleTop + 85;
-        const cardHeight = 220;
+      // 3. Layout Rendering
+      const layout = slideData.layout || 'cards';
+      const contentTop = slideData.subtitle ? 135 : 115;
+      const contentHeight = 310;
+
+      if (layout === 'cards' || !layout) {
+        // 3 Column Cards
+        const items = slideData.items || [];
+        const count = Math.max(1, Math.min(items.length, 3));
+        const gap = 20;
+        const cardWidth = (CONTENT_WIDTH - (gap * (count - 1))) / count;
 
         for (let i = 0; i < count; i++) {
-          const item = slideData.items[i];
-          const cardLeft = titleLeft + i * (cardWidth + cardGap);
+          const item = items[i];
+          const cardLeft = MARGIN_LEFT + i * (cardWidth + gap);
 
-          // Add card shape
-          const cardShape = newSlide.shapes.addTextBox(
-            `${item.heading || `Key Point ${i+1}`}\n\n${item.description || item}`,
-            {
-              left: cardLeft,
-              top: cardTop,
-              width: cardWidth,
-              height: cardHeight
-            }
-          );
-          cardShape.textFrame.textRange.font.size = 12;
-          cardShape.textFrame.textRange.font.color = '#334155';
+          const cardText = `${item.heading || `Point ${i+1}`}\n\n${item.description || item}`;
+          const cardShape = newSlide.shapes.addTextBox(cardText, {
+            left: cardLeft,
+            top: contentTop,
+            width: cardWidth,
+            height: contentHeight
+          });
+
+          cardShape.textFrame.textRange.font.size = 13;
+          cardShape.textFrame.textRange.font.color = theme.textColor;
         }
-      } else if (slideData.bullets && slideData.bullets.length > 0) {
-        // Bullet list layout
-        const bulletText = slideData.bullets.map(b => `•  ${b}`).join('\n\n');
-        const bulletsShape = newSlide.shapes.addTextBox(bulletText, {
-          left: titleLeft,
-          top: titleTop + 85,
-          width: titleWidth,
-          height: 240
+      } else if (layout === 'problem-solution') {
+        // 2 Side-by-Side Comparison Cards
+        const cardWidth = (CONTENT_WIDTH - 24) / 2;
+        const problemText = `THE CHALLENGE\n\n${slideData.problem || (slideData.items?.[0]?.description || 'Challenge description')}`;
+        const solutionText = `THE SOLUTION\n\n${slideData.solution || (slideData.items?.[1]?.description || 'Solution strategy')}`;
+
+        const problemShape = newSlide.shapes.addTextBox(problemText, {
+          left: MARGIN_LEFT,
+          top: contentTop,
+          width: cardWidth,
+          height: contentHeight
         });
-        bulletsShape.textFrame.textRange.font.size = 14;
-        bulletsShape.textFrame.textRange.font.color = '#1E293B';
+        problemShape.textFrame.textRange.font.size = 14;
+        problemShape.textFrame.textRange.font.color = '#7F1D1D';
+
+        const solutionShape = newSlide.shapes.addTextBox(solutionText, {
+          left: MARGIN_LEFT + cardWidth + 24,
+          top: contentTop,
+          width: cardWidth,
+          height: contentHeight
+        });
+        solutionShape.textFrame.textRange.font.size = 14;
+        solutionShape.textFrame.textRange.font.color = '#064E3B';
+
+      } else {
+        // Bullet List / Timeline / Other
+        const bullets = slideData.bullets || (slideData.items ? slideData.items.map(it => `${it.heading}: ${it.description}`) : []);
+        const bulletText = bullets.map(b => `•  ${b}`).join('\n\n');
+
+        const bulletsShape = newSlide.shapes.addTextBox(bulletText, {
+          left: MARGIN_LEFT,
+          top: contentTop,
+          width: CONTENT_WIDTH,
+          height: contentHeight
+        });
+        bulletsShape.textFrame.textRange.font.size = 15;
+        bulletsShape.textFrame.textRange.font.color = theme.textColor;
       }
 
-      // 5. Takeaway footer if present
+      // 4. Bottom Executive Takeaway
       if (slideData.takeaway) {
-        const takeawayShape = newSlide.shapes.addTextBox(`💡 Key Takeaway: ${slideData.takeaway}`, {
-          left: titleLeft,
-          top: slideHeight - 45,
-          width: titleWidth,
-          height: 30
+        const takeawayShape = newSlide.shapes.addTextBox(`💡 Bottom Line: ${slideData.takeaway}`, {
+          left: MARGIN_LEFT,
+          top: SLIDE_HEIGHT - 65,
+          width: CONTENT_WIDTH,
+          height: 35
         });
-        takeawayShape.textFrame.textRange.font.size = 11;
-        takeawayShape.textFrame.textRange.font.italic = true;
-        takeawayShape.textFrame.textRange.font.color = '#64748B';
+        takeawayShape.textFrame.textRange.font.size = 12;
+        takeawayShape.textFrame.textRange.font.bold = true;
+        takeawayShape.textFrame.textRange.font.color = theme.takeawayColor;
       }
 
       await context.sync();
-      showToast('✨ New slide inserted into your presentation!');
+      showToast('✨ Widescreen slide inserted into presentation!');
       scanActiveSlide();
     });
   } catch (error) {
-    console.error('Error adding slide:', error);
-    showToast('Failed to insert slide. Check PowerPoint permissions.');
+    console.error('Error inserting slide:', error);
+    showToast(`Error inserting slide: ${error.message}`);
   }
 }
 
 // ============================================================================
-// Google Gemini API Client (Google AI Studio)
+// Secure Google Gemini API Client (Using Header Auth & Multi-Turn Memory)
 // ============================================================================
 
 /**
- * Calls Google AI Studio Gemini API endpoint directly from the client.
+ * Calls Google AI Studio Gemini API endpoint directly from client.
+ * Uses 'x-goog-api-key' header for security (no keys in URL query string).
  */
-async function callGeminiApi({ prompt, systemInstruction, jsonOutput = false }) {
+async function callGeminiApi({ prompt, contents, systemInstruction, jsonSchema = null, temperature = 0.7 }) {
   if (!state.apiKey) {
     openSettingsModal();
     showToast('Please enter your Google AI Studio API key');
@@ -298,46 +413,54 @@ async function callGeminiApi({ prompt, systemInstruction, jsonOutput = false }) 
   }
 
   const model = state.model || 'gemini-3.8-flash';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(state.apiKey)}`;
+  // Send key via header, NOT query parameter
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
-  // Assemble system instruction combining custom instructions + presentation specialist persona
   let fullSystemInstruction = `You are Gemini Copilot, an elite executive presentation designer and copywriter for Microsoft PowerPoint, working exactly like modern AI presentation assistants. You write punchy, clear, high-impact slide text, structured outlines, and natural speaker notes. Always keep presentation copy concise, structured, and visually engaging. Avoid dense text walls.`;
 
   if (state.customInstructions) {
-    fullSystemInstruction += `\n\nUser Specific Directives: ${state.customInstructions}`;
+    fullSystemInstruction += `\n\nUser Directives: ${state.customInstructions}`;
   }
-
   if (systemInstruction) {
     fullSystemInstruction += `\n\nTask Directive: ${systemInstruction}`;
   }
 
+  // Multi-turn contents array or single turn
+  const requestContents = contents || [
+    {
+      role: 'user',
+      parts: [{ text: prompt }]
+    }
+  ];
+
   const requestBody = {
-    contents: [
-      {
-        role: 'user',
-        parts: [{ text: prompt }]
-      }
-    ],
+    contents: requestContents,
     systemInstruction: {
       parts: [{ text: fullSystemInstruction }]
     },
     generationConfig: {
-      temperature: 0.7,
-      maxOutputTokens: 2048,
-      ...(jsonOutput ? { responseMimeType: 'application/json' } : {})
+      temperature: temperature,
+      maxOutputTokens: 4096,
+      ...(jsonSchema ? {
+        responseMimeType: 'application/json',
+        responseSchema: jsonSchema
+      } : {})
     }
   };
 
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': state.apiKey
+      },
       body: JSON.stringify(requestBody)
     });
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      const msg = errorData.error?.message || `HTTP error ${response.status}: ${response.statusText}`;
+      const msg = errorData.error?.message || `HTTP ${response.status}: ${response.statusText}`;
 
       // Auto-fallback if the previously selected model was deprecated
       if ((msg.includes('no longer available') || msg.includes('not found')) && model !== 'gemini-3.8-flash') {
@@ -347,17 +470,20 @@ async function callGeminiApi({ prompt, systemInstruction, jsonOutput = false }) 
         const tag = document.getElementById('model-tag');
         if (tag) tag.textContent = 'gemini-3.8-flash';
 
-        const retryUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${encodeURIComponent(state.apiKey)}`;
-        const retryRes = await fetch(retryUrl, {
+        const retryRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': state.apiKey
+          },
           body: JSON.stringify(requestBody)
         });
 
         if (retryRes.ok) {
           const retryData = await retryRes.json();
-          const retryText = retryData.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (retryText) return retryText;
+          const candidate = retryData.candidates?.[0];
+          const textParts = candidate?.content?.parts?.map(p => p.text || '').join('');
+          if (textParts) return textParts;
         }
       }
 
@@ -366,10 +492,17 @@ async function callGeminiApi({ prompt, systemInstruction, jsonOutput = false }) 
 
     const data = await response.json();
     const candidate = data.candidates?.[0];
-    const outputText = candidate?.content?.parts?.[0]?.text;
 
+    if (candidate?.finishReason && candidate.finishReason !== 'STOP') {
+      console.warn('Gemini response finishReason:', candidate.finishReason);
+      if (candidate.finishReason === 'SAFETY') {
+        throw new Error('Response blocked by Gemini safety filters.');
+      }
+    }
+
+    const outputText = candidate?.content?.parts?.map(p => p.text || '').join('');
     if (!outputText) {
-      throw new Error('No response text returned by Gemini.');
+      throw new Error('No content returned by Gemini.');
     }
 
     return outputText;
@@ -380,50 +513,65 @@ async function callGeminiApi({ prompt, systemInstruction, jsonOutput = false }) 
 }
 
 // ============================================================================
-// UI Actions & Feature Handlers
+// Multi-Turn Copilot Chat (With Memory & Follow-up Context)
 // ============================================================================
 
-// 1. Chat Tab Handler
 async function handleSendChatMessage() {
   const inputEl = document.getElementById('chat-input');
   const userText = inputEl.value.trim();
   if (!userText) return;
 
-  // Add User Bubble
+  // Add User Bubble to UI
   appendChatMessage('user', userText);
   inputEl.value = '';
   inputEl.style.height = 'auto';
 
-  // Include slide context if toggle checked
-  const includeContext = document.getElementById('include-context-toggle').checked;
-  let fullPrompt = userText;
+  // Inject current slide context if toggle checked
+  const includeContext = document.getElementById('include-context-toggle')?.checked;
+  let turnText = userText;
 
-  if (includeContext && state.currentSlideInfo.text) {
-    fullPrompt = `[Context: Current active PowerPoint slide content]:\n"${state.currentSlideInfo.text}"\n\nUser Question/Instruction:\n${userText}`;
+  if (includeContext && state.currentSlideInfo.text && state.chatHistory.length === 0) {
+    turnText = `[Current Active Slide Context: "${state.currentSlideInfo.text}"]\n\n${userText}`;
   }
 
-  // Temporary Loading Bubble
-  const loadingBubble = appendChatMessage('assistant', 'Thinking with Gemini...', true);
+  // Append user message to multi-turn conversation memory
+  state.chatHistory.push({
+    role: 'user',
+    parts: [{ text: turnText }]
+  });
+
+  const loadingBubble = appendChatMessage('assistant', 'Thinking with Gemini 3.8 Flash...', true);
 
   try {
-    const responseText = await callGeminiApi({ prompt: fullPrompt });
+    const responseText = await callGeminiApi({
+      contents: state.chatHistory,
+      temperature: 0.7
+    });
+
+    // Save assistant reply to memory for seamless follow-ups ("make it shorter", etc.)
+    state.chatHistory.push({
+      role: 'model',
+      parts: [{ text: responseText }]
+    });
+
     updateAssistantBubble(loadingBubble, responseText);
   } catch (error) {
+    // Pop failed user turn from memory
+    state.chatHistory.pop();
     updateAssistantBubble(loadingBubble, `⚠️ **Error calling Gemini API**: ${error.message}\n\nPlease check your API key in Settings.`);
   }
 }
 
 function appendChatMessage(role, text, isLoading = false) {
   const container = document.getElementById('chat-messages');
+  if (!container) return null;
   const bubble = document.createElement('div');
   bubble.className = `message-bubble message-${role}`;
 
   const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   if (role === 'user') {
-    bubble.innerHTML = `
-      <div class="bubble-content">${escapeHtml(text)}</div>
-    `;
+    bubble.innerHTML = `<div class="bubble-content">${escapeHtml(text)}</div>`;
   } else {
     bubble.innerHTML = `
       <div class="bubble-header">
@@ -435,7 +583,7 @@ function appendChatMessage(role, text, isLoading = false) {
       </div>
       ${!isLoading ? `
         <div class="bubble-actions">
-          <button class="copy-small-btn btn-insert-chat" title="Insert response into PowerPoint">✨ Insert to Slide</button>
+          <button class="copy-small-btn btn-insert-chat" title="Create slide from this response">✨ Insert to Slide</button>
           <button class="copy-small-btn btn-copy-chat" title="Copy response to clipboard">Copy</button>
         </div>
       ` : ''}
@@ -462,7 +610,7 @@ function updateAssistantBubble(bubble, newText) {
     actionsEl = document.createElement('div');
     actionsEl.className = 'bubble-actions';
     actionsEl.innerHTML = `
-      <button class="copy-small-btn btn-insert-chat" title="Insert response into PowerPoint">✨ Insert to Slide</button>
+      <button class="copy-small-btn btn-insert-chat" title="Create slide from this response">✨ Insert to Slide</button>
       <button class="copy-small-btn btn-copy-chat" title="Copy response to clipboard">Copy</button>
     `;
     bubble.appendChild(actionsEl);
@@ -470,7 +618,7 @@ function updateAssistantBubble(bubble, newText) {
   attachBubbleActionListeners(bubble, newText);
 
   const container = document.getElementById('chat-messages');
-  container.scrollTop = container.scrollHeight;
+  if (container) container.scrollTop = container.scrollHeight;
 }
 
 function attachBubbleActionListeners(bubble, text) {
@@ -479,15 +627,20 @@ function attachBubbleActionListeners(bubble, text) {
 
   if (insertBtn) {
     insertBtn.addEventListener('click', () => {
-      // Create a slide from this chat content
-      const lines = text.split('\n').filter(l => l.trim().length > 0);
-      const title = lines[0].replace(/^#+\s*/, '').replace(/\*\*/g, '').substring(0, 60);
-      const bullets = lines.slice(1, 6).map(l => l.replace(/^[-*•]\s*/, '').replace(/\*\*/g, ''));
+      // Parse markdown structured blocks or lines
+      const cleanLines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+      const titleLine = cleanLines.find(l => l.startsWith('#') || l.startsWith('**')) || cleanLines[0] || 'Presentation Slide';
+      const cleanTitle = titleLine.replace(/^[#*•\s]+/, '').replace(/\*\*/g, '').substring(0, 60);
+
+      const bullets = cleanLines
+        .filter(l => l !== titleLine && (l.startsWith('-') || l.startsWith('*') || l.startsWith('•') || /^\d+\./.test(l)))
+        .map(l => l.replace(/^[-*•\d.]+\s*/, '').replace(/\*\*/g, ''));
 
       insertSlideIntoPowerPoint({
-        title: title || 'Slide Summary',
+        title: cleanTitle,
         subtitle: 'Created with Gemini Copilot',
-        bullets: bullets.length > 0 ? bullets : [text.substring(0, 150)]
+        bullets: bullets.length > 0 ? bullets : cleanLines.slice(1, 5),
+        layout: 'bullet-list'
       });
     });
   }
@@ -500,7 +653,10 @@ function attachBubbleActionListeners(bubble, text) {
   }
 }
 
-// 2. Slide Creator Handler
+// ============================================================================
+// Slide Creator: Preview-First Generation (No Immediate Insertion)
+// ============================================================================
+
 async function handleGenerateSlide() {
   const topicInput = document.getElementById('slide-topic-input').value.trim();
   if (!topicInput) {
@@ -508,54 +664,84 @@ async function handleGenerateSlide() {
     return;
   }
 
-  const layout = document.getElementById('slide-layout-select').value;
-  const includeNotes = document.getElementById('include-speaker-notes-checkbox').checked;
+  const layout = document.getElementById('slide-layout-select')?.value || 'cards';
+  const theme = document.getElementById('slide-theme-select')?.value || 'modern-blue';
+  const includeNotes = document.getElementById('include-speaker-notes-checkbox')?.checked ?? true;
   const genBtn = document.getElementById('generate-slide-btn');
 
   genBtn.disabled = true;
   genBtn.innerHTML = `<span>Designing slide with Gemini...</span>`;
 
+  // Structured Output Schema
+  const slideSchema = {
+    type: "OBJECT",
+    properties: {
+      title: { type: "STRING", description: "Punchy, executive slide title (max 8 words)" },
+      subtitle: { type: "STRING", description: "Category or subhead (max 5 words)" },
+      layout: { type: "STRING", description: layout },
+      items: {
+        type: "ARRAY",
+        items: {
+          type: "OBJECT",
+          properties: {
+            heading: { type: "STRING" },
+            description: { type: "STRING" }
+          },
+          required: ["heading", "description"]
+        }
+      },
+      bullets: {
+        type: "ARRAY",
+        items: { type: "STRING" }
+      },
+      problem: { type: "STRING" },
+      solution: { type: "STRING" },
+      takeaway: { type: "STRING", description: "Bottom line takeaway" },
+      speakerNotes: { type: "STRING", description: "Talking points for presenter" }
+    },
+    required: ["title"]
+  };
+
   const prompt = `
-Create a professional, structured PowerPoint presentation slide for the following topic:
+Create a high-impact PowerPoint presentation slide based on this topic:
 "${topicInput}"
 
-Layout style requested: ${layout}.
+Layout requested: "${layout}".
+Theme requested: "${theme}".
 Include speaker notes: ${includeNotes}.
 
-You MUST return valid JSON adhering strictly to this schema:
-{
-  "title": "Punchy, executive slide title (max 8 words)",
-  "subtitle": "Short context or category subtitle (max 6 words)",
-  "items": [
-    { "heading": "Point 1 Title", "description": "Concise high-impact explanation (1-2 sentences)" },
-    { "heading": "Point 2 Title", "description": "Concise high-impact explanation (1-2 sentences)" },
-    { "heading": "Point 3 Title", "description": "Concise high-impact explanation (1-2 sentences)" }
-  ],
-  "takeaway": "Single bottom line takeaway for the executive audience",
-  "speakerNotes": "Natural talking points for the presenter"
-}
+For cards or timeline layouts: Provide 3 items with clear heading and 1-2 sentence description.
+For bullet-list layout: Provide 4-5 crisp, executive bullets with bold lead-ins.
+For problem-solution layout: Provide problem and solution descriptions.
+Provide a clear, decisive bottom-line takeaway.
 `;
 
   try {
-    const rawJson = await callGeminiApi({ prompt, jsonOutput: true });
+    const rawJson = await callGeminiApi({
+      prompt,
+      jsonSchema: slideSchema,
+      temperature: 0.2 // Low temperature for clean structured outputs
+    });
+
     let slideData;
     try {
       slideData = JSON.parse(rawJson);
     } catch {
-      // Fallback regex extract
-      const jsonMatch = rawJson.match(/\{[\s\S]*\}/);
-      if (jsonMatch) slideData = JSON.parse(jsonMatch[0]);
+      const match = rawJson.match(/\{[\s\S]*\}/);
+      if (match) slideData = JSON.parse(match[0]);
     }
 
     if (!slideData || !slideData.title) {
-      throw new Error('Could not parse generated slide data.');
+      throw new Error('Failed to parse generated slide data.');
     }
 
+    slideData.theme = theme;
+    slideData.layout = layout;
     state.lastGeneratedSlide = slideData;
-    renderSlidePreview(slideData);
 
-    // Directly insert into PowerPoint
-    await insertSlideIntoPowerPoint(slideData);
+    // Render Preview First (DO NOT insert into PowerPoint yet!)
+    renderSlidePreview(slideData);
+    showToast('Slide generated! Review preview below, then click Insert.');
   } catch (error) {
     console.error(error);
     showToast(`Error generating slide: ${error.message}`);
@@ -563,7 +749,7 @@ You MUST return valid JSON adhering strictly to this schema:
     genBtn.disabled = false;
     genBtn.innerHTML = `
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-      <span>Generate & Insert Slide</span>
+      <span>Generate Slide Preview</span>
     `;
   }
 }
@@ -571,40 +757,58 @@ You MUST return valid JSON adhering strictly to this schema:
 function renderSlidePreview(slideData) {
   const container = document.getElementById('slide-preview-container');
   const body = document.getElementById('slide-preview-body');
+  if (!container || !body) return;
 
-  let cardsHtml = '';
-  if (slideData.items) {
-    cardsHtml = slideData.items.map(item => `
-      <div class="preview-card-item">
-        <div class="preview-card-title">${escapeHtml(item.heading)}</div>
-        <div class="preview-card-text">${escapeHtml(item.description)}</div>
+  let contentHtml = '';
+  if (slideData.items && slideData.items.length > 0) {
+    contentHtml = `
+      <div class="preview-cards-grid">
+        ${slideData.items.map(item => `
+          <div class="preview-card-item">
+            <div class="preview-card-title">${escapeHtml(item.heading)}</div>
+            <div class="preview-card-text">${escapeHtml(item.description)}</div>
+          </div>
+        `).join('')}
       </div>
-    `).join('');
+    `;
+  } else if (slideData.bullets && slideData.bullets.length > 0) {
+    contentHtml = `
+      <ul style="padding-left:18px; margin-top:8px; font-size:12px;">
+        ${slideData.bullets.map(b => `<li style="margin-bottom:4px;">${escapeHtml(b)}</li>`).join('')}
+      </ul>
+    `;
   }
 
   body.innerHTML = `
     <div class="preview-slide-title">${escapeHtml(slideData.title)}</div>
-    ${slideData.subtitle ? `<div style="font-size:12px; color:var(--accent-blue); margin-bottom:8px;">${escapeHtml(slideData.subtitle)}</div>` : ''}
-    <div class="preview-cards-grid">
-      ${cardsHtml}
-    </div>
+    ${slideData.subtitle ? `<div style="font-size:11px; font-weight:600; color:var(--accent-blue); margin-bottom:8px;">${escapeHtml(slideData.subtitle)}</div>` : ''}
+    ${contentHtml}
     ${slideData.takeaway ? `<div style="margin-top:10px; font-size:11px; font-weight:600; color:var(--text-secondary);">💡 Takeaway: ${escapeHtml(slideData.takeaway)}</div>` : ''}
     ${slideData.speakerNotes ? `<div class="preview-notes-box"><strong>Speaker Notes:</strong> ${escapeHtml(slideData.speakerNotes)}</div>` : ''}
   `;
 
   container.classList.remove('hidden');
+  container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-// 3. Refine & Tools Handlers
-async function handleRefineAction(actionType, customInstruction = '') {
-  let targetText = '';
+// ============================================================================
+// Refine Tools: Real Selected Text Inspection & Notes Handlers
+// ============================================================================
 
-  // Attempt to read selected text or active slide text
-  if (state.currentSlideInfo.text) {
-    targetText = state.currentSlideInfo.text;
-  } else {
-    showToast('Please select a text box on the slide or scan the slide first.');
-    return;
+async function handleRefineAction(actionType, customInstruction = '') {
+  // 1. Try reading the user's actual highlighted/selected text in PowerPoint!
+  const selectedText = await getSelectedTextFromDocument();
+  let targetText = selectedText;
+
+  if (!targetText) {
+    // Fallback to active slide text if no text is highlighted
+    if (state.currentSlideInfo.text) {
+      targetText = state.currentSlideInfo.text;
+      showToast('Refining full slide text (highlight a specific text box to refine only that selection).');
+    } else {
+      showToast('Please select text inside a slide text box or scan the slide first.');
+      return;
+    }
   }
 
   let instruction = '';
@@ -629,7 +833,7 @@ async function handleRefineAction(actionType, customInstruction = '') {
       break;
   }
 
-  const prompt = `${instruction}\n\n"${targetText}"\n\nReturn only the refined text ready to be inserted directly into the slide.`;
+  const prompt = `${instruction}\n\n"${targetText}"\n\nReturn ONLY the refined text ready to be inserted directly into the slide.`;
 
   const resultBox = document.getElementById('refine-result-box');
   const resultText = document.getElementById('refine-result-text');
@@ -639,11 +843,11 @@ async function handleRefineAction(actionType, customInstruction = '') {
   resultText.textContent = 'Polishing with Gemini...';
 
   try {
-    const refined = await callGeminiApi({ prompt });
+    const refined = await callGeminiApi({ prompt, temperature: 0.3 });
     resultText.textContent = refined.trim();
     replaceBtn.classList.remove('hidden');
 
-    // Attach click to replace
+    // Replace ONLY the selected text in the document
     replaceBtn.onclick = () => {
       replaceSelectionInDocument(refined.trim());
     };
@@ -653,13 +857,18 @@ async function handleRefineAction(actionType, customInstruction = '') {
 }
 
 async function handleGenerateNotes() {
-  if (!state.currentSlideInfo.text) {
-    showToast('No slide text detected. Write some text on your slide first!');
+  let targetText = await getSelectedTextFromDocument();
+  if (!targetText) {
+    targetText = state.currentSlideInfo.text;
+  }
+
+  if (!targetText) {
+    showToast('No slide text detected. Add text to your slide or scan the slide first!');
     return;
   }
 
   const prompt = `Based on this PowerPoint slide content:
-"${state.currentSlideInfo.text}"
+"${targetText}"
 
 Generate natural, engaging talking points and speaker notes that the presenter can speak out loud. Format with 3-4 bullet points emphasizing tone, transitions, and key takeaways.`;
 
@@ -669,35 +878,10 @@ Generate natural, engaging talking points and speaker notes that the presenter c
   textEl.textContent = 'Crafting speaker notes...';
 
   try {
-    const notes = await callGeminiApi({ prompt });
-    textEl.textContent = notes.trim();
-  } catch (err) {
-    textEl.textContent = `Error: ${err.message}`;
-  }
-}
-
-async function handleCritiqueSlide() {
-  if (!state.currentSlideInfo.text) {
-    showToast('No slide text detected to analyze.');
-    return;
-  }
-
-  const prompt = `Analyze this PowerPoint slide as an expert presentation design coach:
-"${state.currentSlideInfo.text}"
-
-Provide a structured critique covering:
-1. **Clarity & Brevity** (Is it too wordy?)
-2. **Audience Engagement** (Is the takeaway obvious in 3 seconds?)
-3. **Actionable Suggestions** (3 direct improvements).`;
-
-  const box = document.getElementById('critique-result-box');
-  const textEl = document.getElementById('critique-result-text');
-  box.classList.remove('hidden');
-  textEl.innerHTML = 'Analyzing slide...';
-
-  try {
-    const critique = await callGeminiApi({ prompt });
-    textEl.innerHTML = renderMarkdown(critique);
+    const notes = await callGeminiApi({ prompt, temperature: 0.5 });
+    const cleanNotes = notes.trim();
+    state.lastGeneratedNotes = cleanNotes;
+    textEl.textContent = cleanNotes;
   } catch (err) {
     textEl.textContent = `Error: ${err.message}`;
   }
@@ -728,18 +912,22 @@ function loadSavedSettings() {
   const modelTag = document.getElementById('model-tag');
 
   if (state.apiKey) {
-    keyInput.value = maskApiKey(state.apiKey);
-    keyInput.disabled = true;
-    keyInput.type = 'text'; // Safe because it's masked with bullets
+    if (keyInput) {
+      keyInput.value = maskApiKey(state.apiKey);
+      keyInput.disabled = true;
+      keyInput.type = 'text';
+    }
     if (clearKeyBtn) clearKeyBtn.classList.remove('hidden');
     if (securityNote) {
       securityNote.innerHTML = '🔒 <strong>Key Saved & Protected:</strong> The raw key is masked and never exposed in the UI.';
       securityNote.style.color = 'var(--accent-green)';
     }
   } else {
-    keyInput.value = '';
-    keyInput.disabled = false;
-    keyInput.type = 'password';
+    if (keyInput) {
+      keyInput.value = '';
+      keyInput.disabled = false;
+      keyInput.type = 'password';
+    }
     if (clearKeyBtn) clearKeyBtn.classList.add('hidden');
     if (securityNote) {
       securityNote.innerHTML = 'Get your key from <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Google AI Studio</a>. Keys are stored locally on your machine and never sent anywhere except directly to Google\'s API.';
@@ -757,7 +945,6 @@ function saveSettings() {
   const modelSelect = document.getElementById('model-select');
   const instructionsInput = document.getElementById('custom-instructions');
 
-  // If input was enabled and modified
   if (!keyInput.disabled) {
     const rawVal = keyInput.value.trim();
     if (rawVal && !rawVal.includes('••')) {
@@ -769,13 +956,15 @@ function saveSettings() {
     }
   }
 
-  state.model = modelSelect.value || 'gemini-3.8-flash';
-  state.customInstructions = instructionsInput.value.trim();
+  state.model = modelSelect?.value || 'gemini-3.8-flash';
+  state.customInstructions = instructionsInput?.value.trim() || '';
 
   localStorage.setItem('gemini_model', state.model);
   localStorage.setItem('gemini_instructions', state.customInstructions);
 
-  document.getElementById('model-tag').textContent = state.model;
+  const modelTag = document.getElementById('model-tag');
+  if (modelTag) modelTag.textContent = state.model;
+
   closeSettingsModal();
   loadSavedSettings();
   updateUI();
@@ -786,7 +975,6 @@ async function testApiKeyConnection() {
   const keyInput = document.getElementById('api-key-input');
   const statusMsg = document.getElementById('test-key-status');
   
-  // Use state.apiKey if input is masked/disabled, otherwise use entered value
   const keyToTest = (keyInput.disabled || !keyInput.value.trim() || keyInput.value.includes('••')) 
     ? state.apiKey 
     : keyInput.value.trim();
@@ -801,10 +989,12 @@ async function testApiKeyConnection() {
   statusMsg.style.color = 'var(--accent-blue)';
 
   try {
-    const testUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${encodeURIComponent(keyToTest)}`;
-    const res = await fetch(testUrl, {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': keyToTest
+      },
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: 'Hello' }] }]
       })
@@ -826,6 +1016,7 @@ async function testApiKeyConnection() {
 
 function updateUI() {
   const banner = document.getElementById('api-key-banner');
+  if (!banner) return;
   if (!state.apiKey) {
     banner.classList.remove('hidden');
   } else {
@@ -834,12 +1025,13 @@ function updateUI() {
 }
 
 function openSettingsModal() {
-  document.getElementById('settings-modal').classList.remove('hidden');
+  document.getElementById('settings-modal')?.classList.remove('hidden');
 }
 
 function closeSettingsModal() {
-  document.getElementById('settings-modal').classList.add('hidden');
-  document.getElementById('test-key-status').textContent = '';
+  document.getElementById('settings-modal')?.classList.add('hidden');
+  const statusEl = document.getElementById('test-key-status');
+  if (statusEl) statusEl.textContent = '';
 }
 
 // ============================================================================
@@ -864,13 +1056,13 @@ function initDOMListeners() {
   });
 
   // Settings Modal
-  document.getElementById('open-settings-btn').addEventListener('click', openSettingsModal);
-  document.getElementById('close-settings-btn').addEventListener('click', closeSettingsModal);
-  document.getElementById('banner-setup-btn').addEventListener('click', openSettingsModal);
-  document.getElementById('save-settings-btn').addEventListener('click', saveSettings);
-  document.getElementById('test-key-btn').addEventListener('click', testApiKeyConnection);
+  document.getElementById('open-settings-btn')?.addEventListener('click', openSettingsModal);
+  document.getElementById('close-settings-btn')?.addEventListener('click', closeSettingsModal);
+  document.getElementById('banner-setup-btn')?.addEventListener('click', openSettingsModal);
+  document.getElementById('save-settings-btn')?.addEventListener('click', saveSettings);
+  document.getElementById('test-key-btn')?.addEventListener('click', testApiKeyConnection);
 
-  // Change/Clear API Key action
+  // Clear/Change API Key button
   const clearKeyBtn = document.getElementById('clear-key-btn');
   const keyInput = document.getElementById('api-key-input');
   const securityNote = document.getElementById('key-security-note');
@@ -890,7 +1082,7 @@ function initDOMListeners() {
   }
 
   // Scan Slide Button
-  document.getElementById('refresh-slide-btn').addEventListener('click', () => {
+  document.getElementById('refresh-slide-btn')?.addEventListener('click', () => {
     scanActiveSlide();
     showToast('Slide context refreshed');
   });
@@ -898,46 +1090,57 @@ function initDOMListeners() {
   // Chat input
   const chatInput = document.getElementById('chat-input');
   const sendBtn = document.getElementById('chat-send-btn');
-  sendBtn.addEventListener('click', handleSendChatMessage);
+  if (sendBtn) sendBtn.addEventListener('click', handleSendChatMessage);
 
-  chatInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSendChatMessage();
-    }
-  });
+  if (chatInput) {
+    chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        handleSendChatMessage();
+      }
+    });
 
-  // Auto-resize chat textarea
-  chatInput.addEventListener('input', () => {
-    chatInput.style.height = 'auto';
-    chatInput.style.height = `${Math.min(chatInput.scrollHeight, 100)}px`;
-  });
+    chatInput.addEventListener('input', () => {
+      chatInput.style.height = 'auto';
+      chatInput.style.height = `${Math.min(chatInput.scrollHeight, 100)}px`;
+    });
+  }
 
-  // Clear chat
-  document.getElementById('clear-chat-btn').addEventListener('click', () => {
+  // Clear chat (resets UI and resets multi-turn chat memory)
+  document.getElementById('clear-chat-btn')?.addEventListener('click', () => {
+    state.chatHistory = [];
     const container = document.getElementById('chat-messages');
-    container.innerHTML = `
-      <div class="message-bubble message-assistant">
-        <div class="bubble-header"><span class="bubble-sender">Gemini Copilot</span></div>
-        <div class="bubble-content"><p>Conversation cleared. How can I help with your slides?</p></div>
-      </div>
-    `;
+    if (container) {
+      container.innerHTML = `
+        <div class="message-bubble message-assistant">
+          <div class="bubble-header"><span class="bubble-sender">Gemini Copilot</span></div>
+          <div class="bubble-content"><p>Conversation cleared. How can I help with your slides?</p></div>
+        </div>
+      `;
+    }
   });
 
   // Chat Suggestion Chips
   document.querySelectorAll('.chip-btn').forEach(chip => {
     chip.addEventListener('click', () => {
       const prompt = chip.dataset.prompt;
-      document.getElementById('chat-input').value = prompt;
-      handleSendChatMessage();
+      const input = document.getElementById('chat-input');
+      if (input) {
+        input.value = prompt;
+        handleSendChatMessage();
+      }
     });
   });
 
-  // Create Slide Tab
-  document.getElementById('generate-slide-btn').addEventListener('click', handleGenerateSlide);
-  document.getElementById('insert-preview-btn').addEventListener('click', () => {
+  // Slide Generator
+  document.getElementById('generate-slide-btn')?.addEventListener('click', handleGenerateSlide);
+
+  // Insert from Preview button (The ONLY time the generated slide is inserted!)
+  document.getElementById('insert-preview-btn')?.addEventListener('click', () => {
     if (state.lastGeneratedSlide) {
       insertSlideIntoPowerPoint(state.lastGeneratedSlide);
+    } else {
+      showToast('Generate a slide first before inserting.');
     }
   });
 
@@ -949,24 +1152,33 @@ function initDOMListeners() {
     });
   });
 
-  document.getElementById('refine-execute-btn').addEventListener('click', () => {
-    const custom = document.getElementById('refine-custom-input').value.trim();
-    if (custom) {
-      handleRefineAction('custom', custom);
-    } else {
-      handleRefineAction('concise');
+  document.getElementById('refine-execute-btn')?.addEventListener('click', () => {
+    const custom = document.getElementById('refine-custom-input')?.value.trim();
+    handleRefineAction(custom ? 'custom' : 'concise', custom);
+  });
+
+  document.getElementById('copy-refine-btn')?.addEventListener('click', () => {
+    const text = document.getElementById('refine-result-text')?.textContent;
+    if (text) {
+      navigator.clipboard.writeText(text);
+      showToast('Copied refined text!');
     }
   });
 
-  document.getElementById('copy-refine-btn').addEventListener('click', () => {
-    const text = document.getElementById('refine-result-text').textContent;
-    navigator.clipboard.writeText(text);
-    showToast('Copied refined text!');
-  });
+  // Speaker Notes & Insert Notes Handlers
+  document.getElementById('gen-notes-btn')?.addEventListener('click', handleGenerateNotes);
 
-  // Speaker Notes & Critique
-  document.getElementById('gen-notes-btn').addEventListener('click', handleGenerateNotes);
-  document.getElementById('critique-slide-btn').addEventListener('click', handleCritiqueSlide);
+  // Wired up "Add to Slide Notes" button!
+  document.getElementById('insert-notes-btn')?.addEventListener('click', () => {
+    const notesText = state.lastGeneratedNotes || document.getElementById('notes-result-text')?.textContent;
+    if (!notesText) {
+      showToast('Generate speaker notes first.');
+      return;
+    }
+
+    navigator.clipboard.writeText(notesText);
+    showToast('Speaker notes copied to clipboard! Paste directly into PowerPoint Notes.');
+  });
 }
 
 // ============================================================================
@@ -975,6 +1187,7 @@ function initDOMListeners() {
 
 function showToast(message, duration = 3000) {
   const toast = document.getElementById('toast');
+  if (!toast) return;
   toast.textContent = message;
   toast.classList.remove('hidden');
 
