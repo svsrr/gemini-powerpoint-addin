@@ -332,33 +332,58 @@ async function executeReadSlide() {
         }
       }
 
-      textualShapes.forEach(s => s.textFrame.load('hasText, textRange/text, textRange/font/color, textRange/font/size, textRange/font/bold'));
+      // Safely load text frames
+      textualShapes.forEach(s => s.textFrame.load('hasText, textRange/text'));
       await context.sync();
+
+      // Only attempt to load font formatting on shapes that actually have text
+      const withText = textualShapes.filter(s => s.textFrame && s.textFrame.hasText);
+      withText.forEach(s => {
+        try {
+          s.textFrame.textRange.font.load('color, size, bold');
+        } catch (e) {}
+      });
+
+      if (withText.length > 0) {
+        try {
+          await context.sync();
+        } catch (fontErr) {
+          console.warn('Font load optional sync warning:', fontErr);
+        }
+      }
 
       const textShapeList = [];
       let slideTitle = '';
 
-      for (let i = 0; i < textualShapes.length; i++) {
-        const s = textualShapes[i];
-        if (s.textFrame && s.textFrame.hasText) {
-          const text = s.textFrame.textRange.text?.trim() || '';
-          const isTitle = (i === 0);
-          if (isTitle && !slideTitle) slideTitle = text.split('\n')[0];
-          textShapeList.push({
-            id: s.id,
-            name: s.name,
-            type: s.type,
-            isTitle: isTitle,
-            top: s.top,
-            left: s.left,
-            text: text,
-            font: {
-              color: s.textFrame.textRange.font.color,
-              size: s.textFrame.textRange.font.size,
-              bold: s.textFrame.textRange.font.bold
-            }
-          });
-        }
+      for (let i = 0; i < withText.length; i++) {
+        const s = withText[i];
+        const text = s.textFrame.textRange.text?.trim() || '';
+        const isTitle = (i === 0);
+        if (isTitle && !slideTitle) slideTitle = text.split('\n')[0].replace(/^[#*•\s]+/, '');
+
+        let fontColor = null;
+        let fontSize = null;
+        let fontBold = null;
+        try {
+          fontColor = s.textFrame.textRange.font?.color || null;
+          fontSize = s.textFrame.textRange.font?.size || null;
+          fontBold = s.textFrame.textRange.font?.bold || null;
+        } catch {}
+
+        textShapeList.push({
+          id: s.id,
+          name: s.name,
+          type: s.type,
+          isTitle: isTitle,
+          top: s.top,
+          left: s.left,
+          text: text,
+          font: {
+            color: fontColor,
+            size: fontSize,
+            bold: fontBold
+          }
+        });
       }
 
       const tableList = [];
@@ -402,20 +427,21 @@ async function executeSetFont({ shape_id, color, size, bold, italic }) {
       const textual = shapes.items.filter(s =>
         ['textbox', 'geometricshape', 'placeholder'].includes(String(s.type || '').toLowerCase())
       );
-      textual.sort((a, b) => (a.top || 0) - (b.top || 0));
+      textual.forEach(s => s.textFrame.load('hasText'));
+      await context.sync();
+
+      const withText = textual.filter(s => s.textFrame && s.textFrame.hasText);
+      withText.sort((a, b) => (a.top || 0) - (b.top || 0));
 
       let targetShape;
       const lowerId = (shape_id || '').toLowerCase();
       if (lowerId === 'heading' || lowerId === 'title' || lowerId === 'slidetitle' || lowerId === 'main') {
-        targetShape = textual[0];
+        targetShape = withText[0] || textual[0];
       } else {
-        targetShape = shapes.items.find(s => s.id === shape_id || s.name === shape_id) || textual[0];
+        targetShape = shapes.items.find(s => s.id === shape_id || s.name === shape_id) || withText[0] || textual[0];
       }
 
       if (!targetShape) return { success: false, error: `Shape not found: ${shape_id}` };
-
-      targetShape.textFrame.load('hasText, textRange/font');
-      await context.sync();
 
       if (color) targetShape.textFrame.textRange.font.color = color;
       if (size) targetShape.textFrame.textRange.font.size = size;
@@ -449,20 +475,21 @@ async function executeSetShapeText({ shape_id, text }) {
       const textual = shapes.items.filter(s =>
         ['textbox', 'geometricshape', 'placeholder'].includes(String(s.type || '').toLowerCase())
       );
-      textual.sort((a, b) => (a.top || 0) - (b.top || 0));
+      textual.forEach(s => s.textFrame.load('hasText'));
+      await context.sync();
+
+      const withText = textual.filter(s => s.textFrame && s.textFrame.hasText);
+      withText.sort((a, b) => (a.top || 0) - (b.top || 0));
 
       let targetShape;
       const lowerId = (shape_id || '').toLowerCase();
-      if (lowerId === 'heading' || lowerId === 'title') {
-        targetShape = textual[0];
+      if (lowerId === 'heading' || lowerId === 'title' || lowerId === 'slidetitle' || lowerId === 'main') {
+        targetShape = withText[0] || textual[0];
       } else {
-        targetShape = shapes.items.find(s => s.id === shape_id || s.name === shape_id) || textual[0];
+        targetShape = shapes.items.find(s => s.id === shape_id || s.name === shape_id) || withText[0] || textual[0];
       }
 
       if (!targetShape) return { success: false, error: `Shape not found: ${shape_id}` };
-
-      targetShape.textFrame.load('hasText, textRange');
-      await context.sync();
 
       targetShape.textFrame.textRange.text = text;
       await context.sync();
@@ -489,20 +516,26 @@ async function executeSetTableCell({ shape_id, row, col, text, font_color, fill_
       shapes.load('items/id, items/name, items/type');
       await context.sync();
 
-      let tableShape;
-      if (shape_id) {
-        tableShape = shapes.items.find(s => (s.id === shape_id || s.name === shape_id) && String(s.type || '').toLowerCase() === 'table');
-      }
-      if (!tableShape) {
-        tableShape = shapes.items.find(s => String(s.type || '').toLowerCase() === 'table');
-      }
+      const tableShapes = shapes.items.filter(s => String(s.type || '').toLowerCase() === 'table');
+      if (tableShapes.length === 0) return { success: false, error: 'No table found on slide' };
 
-      if (!tableShape) return { success: false, error: 'No table found on slide' };
-
-      const table = tableShape.getTable();
-      table.load('rowCount, columnCount, values');
+      const loaded = [];
+      for (const s of tableShapes) {
+        const tbl = s.getTable();
+        tbl.load('rowCount, columnCount');
+        loaded.push({ shape: s, table: tbl });
+      }
       await context.sync();
 
+      let target = null;
+      if (shape_id) {
+        target = loaded.find(item => item.shape.id === shape_id || item.shape.name === shape_id);
+      }
+      if (!target) {
+        target = loaded.find(item => item.table.rowCount > row && item.table.columnCount > col) || loaded[0];
+      }
+
+      const table = target.table;
       if (row < 0 || row >= table.rowCount || col < 0 || col >= table.columnCount) {
         return { success: false, error: `Cell [${row}, ${col}] out of bounds (Table is ${table.rowCount}x${table.columnCount})` };
       }
@@ -510,18 +543,19 @@ async function executeSetTableCell({ shape_id, row, col, text, font_color, fill_
       const cell = table.getCellOrNullObject(row, col);
       if (text !== undefined) cell.text = text;
       if (font_color) {
-        cell.font.color = font_color;
         try {
-          const currentText = text !== undefined ? text : ((table.values[row] && table.values[row][col]) || '');
-          cell.textRuns = [{ text: currentText, font: { color: font_color } }];
+          cell.font.color = font_color;
         } catch (e) {}
       }
       if (fill_color) {
-        cell.fill.setSolidColor(fill_color);
+        try {
+          cell.fill.setSolidColor(fill_color);
+        } catch (e) {}
       }
 
       await context.sync();
-      return { success: true, message: `Updated cell [${row}, ${col}] (text: ${text || 'unchanged'}, color: ${font_color || 'unchanged'})` };
+      await scanActiveSlide();
+      return { success: true, message: `Updated cell [${row}, ${col}] on table "${target.shape.name || target.shape.id}" (text: ${text || 'unchanged'}, color: ${font_color || 'unchanged'})` };
     });
   } catch (e) {
     return { success: false, error: e.message };
@@ -543,13 +577,27 @@ async function executeBatchUpdateTable({ shape_id, updates = [] }) {
       shapes.load('items/id, items/name, items/type');
       await context.sync();
 
-      let tableShape = shapes.items.find(s => String(s.type || '').toLowerCase() === 'table');
-      if (!tableShape) return { success: false, error: 'No table found on active slide' };
+      const tableShapes = shapes.items.filter(s => String(s.type || '').toLowerCase() === 'table');
+      if (tableShapes.length === 0) return { success: false, error: 'No table found on active slide' };
 
-      const table = tableShape.getTable();
-      table.load('rowCount, columnCount, values');
+      const loaded = [];
+      for (const s of tableShapes) {
+        const tbl = s.getTable();
+        tbl.load('rowCount, columnCount');
+        loaded.push({ shape: s, table: tbl });
+      }
       await context.sync();
 
+      let target = null;
+      if (shape_id) {
+        target = loaded.find(item => item.shape.id === shape_id || item.shape.name === shape_id);
+      }
+      if (!target) {
+        const maxRow = Math.max(...updates.map(u => u.row || 0), 0);
+        target = loaded.find(item => item.table.rowCount > maxRow) || loaded[0];
+      }
+
+      const table = target.table;
       let count = 0;
       for (const up of updates) {
         const { row, col, text, font_color, fill_color } = up;
@@ -557,20 +605,22 @@ async function executeBatchUpdateTable({ shape_id, updates = [] }) {
           const cell = table.getCellOrNullObject(row, col);
           if (text !== undefined) cell.text = text;
           if (font_color) {
-            cell.font.color = font_color;
             try {
-              const currentText = text !== undefined ? text : ((table.values[row] && table.values[row][col]) || '');
-              cell.textRuns = [{ text: currentText, font: { color: font_color } }];
+              cell.font.color = font_color;
             } catch (e) {}
           }
-          if (fill_color) cell.fill.setSolidColor(fill_color);
+          if (fill_color) {
+            try {
+              cell.fill.setSolidColor(fill_color);
+            } catch (e) {}
+          }
           count++;
         }
       }
 
       await context.sync();
       await scanActiveSlide();
-      return { success: true, updatedCount: count };
+      return { success: true, updatedCount: count, tableName: target.shape.name || target.shape.id };
     });
   } catch (e) {
     return { success: false, error: e.message, updatedCount: 0 };
@@ -1017,16 +1067,20 @@ async function runGeminiAgentLoop(userMessage, onUpdate) {
   let baseInstruction = `You are Gemini Copilot, an elite AI presentation assistant embedded inside Microsoft PowerPoint.
 You have FULL DIRECT CONTROL to read, modify, format, and structure the user's active PowerPoint slide using function calling tools.
 
+Host Environment: ${state.isPowerPoint ? 'Microsoft PowerPoint Desktop / Web' : 'Browser Preview Mode (Simulation)'}
+
 Current Slide Snapshot:
 ${JSON.stringify(slideSnapshot, null, 2)}
 
 Directives:
-1. When asked to modify or style the slide (e.g. "change heading color to orange", "change remarks text to black instead of green", "shorten text", "make header blue", "add a slide"):
+1. When asked to modify, style, recolor, shorten, rewrite, format, or restructure the slide (e.g. "change heading color to orange", "change color of remarks text to black instead of green", "shorten text", "make header blue", "add a slide"):
    DO NOT output generic tutorial instructions, manual steps, or VBA macro code!
    IMMEDIATELY call the appropriate tool(s).
-2. For slide titles / headings, use set_font(shape_id="heading", color="#...") or the specific title shape ID from the snapshot.
+2. For slide titles / headings, use set_font(shape_id="heading", color="#...") or set_shape_text(shape_id="heading", text="..."), or target the specific title shape ID from the snapshot.
 3. For table cells, use set_table_cell or batch_update_table with the exact row and column indices.
-4. When tools complete, summarize clearly and concisely what was directly modified on the slide.`;
+   - For example, to change status/remarks column color to black, call batch_update_table with updates for each row: [{ row: 1, col: 2, font_color: "#000000" }, ...]
+4. When tools complete, summarize clearly and concisely what was directly modified on the slide.
+5. If running in Browser Preview Mode, note that changes are simulated.`;
 
   if (state.customInstructions) {
     baseInstruction += `\n\nUser Custom Persona: ${state.customInstructions}`;
@@ -1121,8 +1175,8 @@ Directives:
       });
     }
 
-    // Append tool outputs as user turn for next iteration
-    contents.push({ role: 'user', parts: toolResponses });
+    // Append tool outputs with role 'function' for Gemini function calling standard
+    contents.push({ role: 'function', parts: toolResponses });
   }
 
   return "✅ Actions completed directly on your slide.";

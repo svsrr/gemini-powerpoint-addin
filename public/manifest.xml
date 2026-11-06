@@ -21,6 +21,7 @@
   <AppDomains>
     <AppDomain>https://generativelanguage.googleapis.com</AppDomain>
     <AppDomain>https://ppt.distillatelabs.com</AppDomain>
+    <AppDomain>https://ppt-distillatelabs.pages.dev</AppDomain>
   </AppDomains>
 
   <!-- Hosts: Only Presentation (PowerPoint) -->
