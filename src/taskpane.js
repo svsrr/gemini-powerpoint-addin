@@ -1106,6 +1106,9 @@ Directives:
     delete_shape: async (args) => await executeDeleteShape(args)
   };
 
+  // Track actions executed during this session to report accurately even if summary API fails
+  const executedActions = [];
+
   // Agent loop: up to 6 iterations for multi-step tool calls
   for (let iter = 0; iter < 6; iter++) {
     const requestBody = {
@@ -1131,7 +1134,16 @@ Directives:
 
     if (!response.ok) {
       const errData = await response.json().catch(() => ({}));
-      throw new Error(errData.error?.message || `HTTP ${response.status}: ${response.statusText}`);
+      const apiErrMsg = errData.error?.message || `HTTP ${response.status}: ${response.statusText}`;
+      if (executedActions.length > 0) {
+        // Actions were successfully applied to the PowerPoint slide!
+        const summary = executedActions.map(a => `• ${a}`).join('\n');
+        const fallbackMsg = `✅ Directly applied to your slide:\n${summary}`;
+        state.chatHistory.push({ role: 'user', parts: [{ text: userMessage }] });
+        state.chatHistory.push({ role: 'model', parts: [{ text: fallbackMsg }] });
+        return fallbackMsg;
+      }
+      throw new Error(apiErrMsg);
     }
 
     const data = await response.json();
@@ -1161,6 +1173,9 @@ Directives:
       if (handler) {
         try {
           result = await handler(fc.args);
+          if (result && result.success !== false) {
+            executedActions.push(result.message || `${fc.name} completed`);
+          }
         } catch (e) {
           result = { success: false, error: e.message };
         }
@@ -1175,8 +1190,8 @@ Directives:
       });
     }
 
-    // Append tool outputs with role 'function' for Gemini function calling standard
-    contents.push({ role: 'function', parts: toolResponses });
+    // Append tool outputs as 'user' role (Gemini API standard for developer endpoint)
+    contents.push({ role: 'user', parts: toolResponses });
   }
 
   return "✅ Actions completed directly on your slide.";

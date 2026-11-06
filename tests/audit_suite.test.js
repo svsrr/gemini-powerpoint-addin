@@ -10,7 +10,8 @@ console.log('--- Starting PowerPoint Copilot Audit Test Suite ---');
 // Test 1: Validate bundle and taskpane.js syntax and integrity
 const taskpaneCode = fs.readFileSync('src/taskpane.js', 'utf8');
 
-assert(taskpaneCode.includes("role: 'function'"), 'CRITICAL: functionResponse must use role: "function"');
+assert(taskpaneCode.includes("role: 'user'"), 'CRITICAL: functionResponse must use role: "user" in Gemini Developer API');
+assert(!taskpaneCode.includes("role: 'function'"), 'CRITICAL: role: "function" is rejected by Gemini Developer API');
 assert(!taskpaneCode.includes("cell.textRuns ="), 'CRITICAL: Illegal assignment to cell.textRuns must be eliminated');
 assert(taskpaneCode.includes("executeReadSlide"), 'executeReadSlide must be defined');
 assert(taskpaneCode.includes("executeSetFont"), 'executeSetFont must be defined');
@@ -129,9 +130,9 @@ function simulateAgentTurn(userMessage, toolCalls, toolResults, finalModelText) 
     parts: toolCalls.map(tc => ({ functionCall: tc }))
   });
 
-  // Function Response Turn
+  // Function Response Turn (Must be role: 'user' for Gemini API)
   contents.push({
-    role: 'function',
+    role: 'user',
     parts: toolResults.map(tr => ({
       functionResponse: {
         name: tr.name,
@@ -165,7 +166,7 @@ const turns = simulateAgentTurn(
 assert.strictEqual(turns.length, 4);
 assert.strictEqual(turns[0].role, 'user');
 assert.strictEqual(turns[1].role, 'model');
-assert.strictEqual(turns[2].role, 'function');
+assert.strictEqual(turns[2].role, 'user');
 assert.strictEqual(turns[3].role, 'model');
 assert.strictEqual(turns[2].parts.length, 2);
 console.log('✔ Test 5 Passed: Multi-tool parallel execution and 4-turn chaining payload verified');
