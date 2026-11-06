@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gemini Copilot for PowerPoint | Distillate Labs</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --primary: #2563eb;
+      --primary-dark: #1d4ed8;
+      --bg-dark: #0f172a;
+      --bg-card: #ffffff;
+      --text-main: #0f172a;
+      --text-sub: #475569;
+      --border: #e2e8f0;
+      --gemini-gradient: linear-gradient(135deg, #1a73e8 0%, #8ab4f8 50%, #9333ea 100%);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--font-family);
+      background-color: #f8fafc;
+      color: var(--text-main);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    header {
+      background: #ffffff;
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 18px;
+      color: #0f172a;
+      text-decoration: none;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 20px;
+      align-items: center;
+    }
+
+    .nav-links a {
+      color: var(--text-sub);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+      transition: color 0.15s;
+    }
+
+    .nav-links a:hover {
+      color: var(--primary);
+    }
+
+    .container {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 60px 24px;
+    }
+
+    .hero {
+      text-align: center;
+      max-width: 780px;
+      margin: 0 auto 60px;
+    }
+
+    .badge {
+      display: inline-block;
+      background: linear-gradient(135deg, rgba(26, 115, 232, 0.1) 0%, rgba(147, 51, 234, 0.1) 100%);
+      color: #2563eb;
+      border: 1px solid rgba(37, 99, 235, 0.2);
+      padding: 6px 14px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 20px;
+    }
+
+    h1 {
+      font-size: 44px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      margin-bottom: 20px;
+      color: #0f172a;
+    }
+
+    .gradient-text {
+      background: var(--gemini-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    p.lead {
+      font-size: 18px;
+      color: var(--text-sub);
+      margin-bottom: 32px;
+      line-height: 1.5;
+    }
+
+    .hero-actions {
+      display: flex;
+      justify-content: center;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.15s;
+      cursor: pointer;
+    }
+
+    .btn-primary {
+      background: var(--gemini-gradient);
+      color: #ffffff;
+      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+    }
+
+    .btn-primary:hover {
+      opacity: 0.95;
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      background: #ffffff;
+      color: #0f172a;
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover {
+      background: #f1f5f9;
+    }
+
+    /* Manifest Callout Box */
+    .manifest-box {
+      background: #ffffff;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      max-width: 680px;
+      margin: 0 auto 60px;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+      text-align: left;
+    }
+
+    .manifest-title {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: var(--text-main);
+    }
+
+    .copy-row {
+      display: flex;
+      gap: 8px;
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 12px;
+      align-items: center;
+    }
+
+    .copy-input {
+      flex: 1;
+      border: none;
+      background: transparent;
+      font-family: monospace;
+      font-size: 13px;
+      color: #0f172a;
+      outline: none;
+    }
+
+    .copy-btn {
+      background: var(--primary);
+      color: white;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    /* Features Grid */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 24px;
+      margin-bottom: 60px;
+    }
+
+    .card {
+      background: #ffffff;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+
+    .card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.08);
+    }
+
+    .card-icon {
+      font-size: 24px;
+      margin-bottom: 12px;
+      display: inline-block;
+    }
+
+    .card h3 {
+      font-size: 17px;
+      font-weight: 700;
+      margin-bottom: 8px;
+      color: var(--text-main);
+    }
+
+    .card p {
+      font-size: 14px;
+      color: var(--text-sub);
+    }
+
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 30px 24px;
+      text-align: center;
+      font-size: 13px;
+      color: var(--text-sub);
+      background: #ffffff;
+    }
+
+    footer a {
+      color: var(--primary);
+      text-decoration: none;
+      margin: 0 8px;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <a href="/" class="brand">
+      <img src="./assets/icon-32.png" alt="Gemini Copilot" width="28" height="28">
+      <span>Distillate Labs</span>
+    </a>
+    <nav class="nav-links">
+      <a href="taskpane.html">Web Taskpane</a>
+      <a href="support.html">Support</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="terms.html">Terms</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <div class="badge">Google Gemini + Microsoft PowerPoint</div>
+      <h1>Intelligent Slides with <span class="gradient-text">Gemini Copilot</span></h1>
+      <p class="lead">
+        A seamless Microsoft PowerPoint Add-in powered by Google Gemini API from Google AI Studio. Generate structured slides, rewrite bullet points with executive polish, craft presenter talking notes, and chat with your presentation in real-time.
+      </p>
+
+      <div class="hero-actions">
+        <a href="taskpane.html" class="btn btn-primary">Open Web Taskpane Demo</a>
+        <a href="manifest.xml" download class="btn btn-secondary">Download manifest.xml</a>
+      </div>
+    </section>
+
+    <!-- Manifest URL copy card -->
+    <div class="manifest-box">
+      <div class="manifest-title">Direct Add-in Manifest URL (For Office 365 Admin & PowerPoint Sideloading)</div>
+      <div class="copy-row">
+        <input type="text" id="manifest-url" class="copy-input" value="https://ppt.distillatelabs.com/manifest.xml" readonly />
+        <button id="copy-btn" class="copy-btn">Copy URL</button>
+      </div>
+      <p style="font-size: 12px; color: #64748b; margin-top: 8px;">
+        Use this URL in the <strong>Microsoft 365 Admin Center</strong> (Integrated Apps) or PowerPoint on the Web to install globally.
+      </p>
+    </div>
+
+    <!-- Feature Highlights -->
+    <section class="grid">
+      <div class="card">
+        <span class="card-icon">🪄</span>
+        <h3>Instant Slide Builder</h3>
+        <p>Give Gemini a topic, raw notes, or strategy outline. It automatically generates formatted cards, columns, titles, and takeaways directly inside your presentation.</p>
+      </div>
+
+      <div class="card">
+        <span class="card-icon">✏️</span>
+        <h3>One-Click Rewrite & Polish</h3>
+        <p>Highlight text on any slide and transform it instantly: Make Concise, Executive Tone, Convert to Bullets, Make Persuasive, or Fix Grammar.</p>
+      </div>
+
+      <div class="card">
+        <span class="card-icon">🎤</span>
+        <h3>Speaker Notes Generator</h3>
+        <p>Never present unprepared. Gemini reads your active slide elements and writes conversational, persuasive talking points for the presenter.</p>
+      </div>
+
+      <div class="card">
+        <span class="card-icon">🔒</span>
+        <h3>Privacy & BYOK Architecture</h3>
+        <p>Bring Your Own Key (BYOK) from Google AI Studio. Direct client-side calls to Google's API with zero intermediary logging or third-party servers.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>&copy; 2026 Distillate Labs. All rights reserved.</p>
+    <p style="margin-top: 8px;">
+      <a href="privacy.html">Privacy Policy</a> •
+      <a href="terms.html">Terms of Use</a> •
+      <a href="support.html">Support</a> •
+      <a href="https://aistudio.google.com" target="_blank" rel="noopener">Google AI Studio</a>
+    </p>
+  </footer>
+
+  <script>
+    document.getElementById('copy-btn').addEventListener('click', () => {
+      const input = document.getElementById('manifest-url');
+      input.select();
+      navigator.clipboard.writeText(input.value);
+      document.getElementById('copy-btn').textContent = 'Copied!';
+      setTimeout(() => {
+        document.getElementById('copy-btn').textContent = 'Copy URL';
+      }, 2000);
+    });
+  </script>
+</body>
+</html>

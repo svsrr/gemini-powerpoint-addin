@@ -1,0 +1,8 @@
+/*
+  Access-Control-Allow-Origin: *
+  Content-Security-Policy: frame-ancestors 'self' https://*.office.com https://*.office365.com https://*.microsoft.com https://*.live.com https://*.officeapps.live.com https://ppt.distillatelabs.com;
+  X-Content-Type-Options: nosniff
+
+/manifest.xml
+  Content-Type: application/xml; charset=utf-8
+  Access-Control-Allow-Origin: *

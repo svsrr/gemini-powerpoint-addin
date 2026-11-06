@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OfficeApp
+          xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+          xmlns:ov="http://schemas.microsoft.com/office/taskpaneappversionoverrides"
+          xsi:type="TaskPaneApp">
+
+  <!-- Begin Basic Settings: Id, Version, Provider, Locales -->
+  <Id>e4b3c2d1-9876-4321-a1b2-c3d4e5f60718</Id>
+  <Version>1.0.0.0</Version>
+  <ProviderName>Distillate Labs</ProviderName>
+  <DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="Gemini Copilot for PowerPoint" />
+  <Description DefaultValue="AI presentation assistant and slide creator powered by Google Gemini API from Google AI Studio." />
+  <IconUrl DefaultValue="https://ppt.distillatelabs.com/assets/icon-32.png" />
+  <HighResolutionIconUrl DefaultValue="https://ppt.distillatelabs.com/assets/icon-80.png" />
+  <SupportUrl DefaultValue="https://ppt.distillatelabs.com/support.html" />
+
+  <!-- Domains allowed for navigation/API access within the webview -->
+  <AppDomains>
+    <AppDomain>https://generativelanguage.googleapis.com</AppDomain>
+    <AppDomain>https://ppt.distillatelabs.com</AppDomain>
+  </AppDomains>
+
+  <!-- Hosts: Only Presentation (PowerPoint) -->
+  <Hosts>
+    <Host Name="Presentation" />
+  </Hosts>
+
+  <DefaultSettings>
+    <SourceLocation DefaultValue="https://ppt.distillatelabs.com/taskpane.html" />
+  </DefaultSettings>
+
+  <Permissions>ReadWriteDocument</Permissions>
+
+  <!-- Modern Office Ribbon UI & Taskpane overrides -->
+  <VersionOverrides xmlns="http://schemas.microsoft.com/office/taskpaneappversionoverrides" xsi:type="VersionOverridesV1_0">
+    <Hosts>
+      <Host xsi:type="Presentation">
+        <DesktopFormFactor>
+          <GetStarted>
+            <Title resid="GetStarted.Title"/>
+            <Description resid="GetStarted.Description"/>
+            <LearnMoreUrl resid="GetStarted.LearnMoreUrl"/>
+          </GetStarted>
+          <!-- Function file for commands -->
+          <FunctionFile resid="Taskpane.Url" />
+
+          <!-- Ribbon button placed in Home Tab -->
+          <ExtensionPoint xsi:type="PrimaryCommandSurface">
+            <OfficeTab id="TabHome">
+              <Group id="GeminiCopilot.Group">
+                <Label resid="GroupLabel" />
+                <Icon>
+                  <bt:Image size="16" resid="Icon.16" />
+                  <bt:Image size="32" resid="Icon.32" />
+                  <bt:Image size="80" resid="Icon.80" />
+                </Icon>
+
+                <Control xsi:type="Button" id="GeminiTaskpaneButton">
+                  <Label resid="ButtonLabel" />
+                  <Supertip>
+                    <Title resid="ButtonTitle" />
+                    <Description resid="ButtonDesc" />
+                  </Supertip>
+                  <Icon>
+                    <bt:Image size="16" resid="Icon.16" />
+                    <bt:Image size="32" resid="Icon.32" />
+                    <bt:Image size="80" resid="Icon.80" />
+                  </Icon>
+                  <Action xsi:type="ShowTaskpane">
+                    <TaskpaneId>GeminiTaskpaneId</TaskpaneId>
+                    <SourceLocation resid="Taskpane.Url" />
+                  </Action>
+                </Control>
+              </Group>
+            </OfficeTab>
+          </ExtensionPoint>
+        </DesktopFormFactor>
+      </Host>
+    </Hosts>
+
+    <Resources>
+      <bt:Images>
+        <bt:Image id="Icon.16" DefaultValue="https://ppt.distillatelabs.com/assets/icon-16.png" />
+        <bt:Image id="Icon.32" DefaultValue="https://ppt.distillatelabs.com/assets/icon-32.png" />
+        <bt:Image id="Icon.80" DefaultValue="https://ppt.distillatelabs.com/assets/icon-80.png" />
+      </bt:Images>
+      <bt:Urls>
+        <bt:Url id="Taskpane.Url" DefaultValue="https://ppt.distillatelabs.com/taskpane.html" />
+        <bt:Url id="GetStarted.LearnMoreUrl" DefaultValue="https://ppt.distillatelabs.com" />
+      </bt:Urls>
+      <bt:ShortStrings>
+        <bt:String id="GetStarted.Title" DefaultValue="Get Started with Gemini Copilot" />
+        <bt:String id="GroupLabel" DefaultValue="Gemini AI" />
+        <bt:String id="ButtonLabel" DefaultValue="Gemini Copilot" />
+        <bt:String id="ButtonTitle" DefaultValue="Open Gemini Copilot" />
+      </bt:ShortStrings>
+      <bt:LongStrings>
+        <bt:String id="GetStarted.Description" DefaultValue="Launch Gemini Copilot to write, design, summarize, and polish presentation slides." />
+        <bt:String id="ButtonDesc" DefaultValue="Opens the Gemini Copilot sidebar to generate slides, rewrite text, add speaker notes, and chat." />
+      </bt:LongStrings>
+    </Resources>
+  </VersionOverrides>
+</OfficeApp>

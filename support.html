@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Support - Gemini Copilot for PowerPoint</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; max-width: 800px; margin: 40px auto; padding: 0 20px; color: #1e293b; }
+    h1 { font-size: 28px; color: #0f172a; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px; }
+    h2 { font-size: 20px; color: #1e293b; margin-top: 24px; }
+    p, li { font-size: 15px; color: #475569; }
+    .card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin: 16px 0; }
+    a { color: #2563eb; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <h1>Support for Gemini Copilot</h1>
+  <p>Need help setting up or using Gemini Copilot for PowerPoint? Follow the instructions below.</p>
+
+  <div class="card">
+    <h2>1. Obtaining a Google AI Studio API Key</h2>
+    <ol>
+      <li>Visit <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Google AI Studio</a>.</li>
+      <li>Sign in with your Google account.</li>
+      <li>Click <strong>Create API Key</strong> and copy the generated key.</li>
+      <li>In the PowerPoint Add-in, click the ⚙️ <strong>Settings</strong> icon, paste the key, and click <strong>Test Connection</strong>.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h2>2. Common Troubleshooting</h2>
+    <ul>
+      <li><strong>Quota or Rate Limit Error (429):</strong> Verify that your Google Cloud account has billing enabled if your free tier quota has been reached.</li>
+      <li><strong>Invalid API Key:</strong> Ensure there are no leading or trailing spaces in the key string.</li>
+      <li><strong>Slide Not Detected:</strong> Click the <strong>Scan</strong> button in the add-in to refresh the PowerPoint slide reading context.</li>
+    </ul>
+  </div>
+</body>
+</html>
