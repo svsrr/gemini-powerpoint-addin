@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 
-  <script type="module" crossorigin src="/assets/taskpane-DOYcG-wb.js"></script>
+  <script type="module" crossorigin src="/assets/taskpane-DnYiPBBj.js"></script>
   <link rel="stylesheet" crossorigin href="/assets/taskpane-BV9nQfII.css">
 </head>
 <body>
@@ -36,7 +36,7 @@
         </div>
         <div class="header-title-box">
           <h1 class="header-title">Gemini Copilot</h1>
-          <span id="model-tag" class="model-tag">gemini-2.5-flash</span>
+          <span id="model-tag" class="model-tag">gemini-3.8-flash</span>
         </div>
       </div>
       
@@ -296,10 +296,10 @@
               Google AI Studio API Key <span class="required">*</span>
             </label>
             <div class="input-with-action">
-              <input type="password" id="api-key-input" class="form-input" placeholder="AIzaSy..." />
-              <button id="toggle-key-visibility" class="icon-text-btn" type="button">Show</button>
+              <input type="password" id="api-key-input" class="form-input" placeholder="Paste your API key (AIzaSy...)" autocomplete="off" spellcheck="false" />
+              <button id="clear-key-btn" class="icon-text-btn hidden" type="button" title="Change or remove saved key">Change</button>
             </div>
-            <p class="form-helper">
+            <p id="key-security-note" class="form-helper">
               Get your key from <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Google AI Studio</a>. Keys are stored locally on your machine and never sent anywhere except directly to Google's API.
             </p>
           </div>
@@ -314,9 +314,9 @@
           <div class="form-group">
             <label for="model-select">Gemini Model</label>
             <select id="model-select" class="form-select">
-              <option value="gemini-2.5-flash">Gemini 2.5 Flash (Recommended - Fastest & High Quality)</option>
-              <option value="gemini-2.5-pro">Gemini 2.5 Pro (Deep Reasoning & Complex Presentations)</option>
-              <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+              <option value="gemini-3.8-flash">Gemini 3.8 Flash (Recommended - Fastest & High Quality)</option>
+              <option value="gemini-3.8-pro">Gemini 3.8 Pro (Deep Reasoning & Complex Presentations)</option>
+              <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
             </select>
           </div>
 

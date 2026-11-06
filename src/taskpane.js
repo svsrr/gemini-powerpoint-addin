@@ -6,7 +6,7 @@
 // Application State
 const state = {
   apiKey: localStorage.getItem('gemini_api_key') || '',
-  model: localStorage.getItem('gemini_model') || 'gemini-2.5-flash',
+  model: localStorage.getItem('gemini_model') || 'gemini-3.8-flash',
   customInstructions: localStorage.getItem('gemini_instructions') || '',
   isOfficeReady: false,
   isPowerPoint: false,
@@ -288,7 +288,7 @@ async function callGeminiApi({ prompt, systemInstruction, jsonOutput = false }) 
     throw new Error('API Key missing');
   }
 
-  const model = state.model || 'gemini-2.5-flash';
+  const model = state.model || 'gemini-3.8-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(state.apiKey)}`;
 
   // Assemble system instruction combining custom instructions + presentation specialist persona
@@ -675,17 +675,46 @@ Provide a structured critique covering:
 // Settings & Key Management
 // ============================================================================
 
+function maskApiKey(key) {
+  if (!key) return '';
+  if (key.length <= 8) return '••••••••';
+  const start = key.substring(0, 6);
+  const end = key.substring(key.length - 4);
+  return `${start}••••••••••••••••${end}`;
+}
+
 function loadSavedSettings() {
   state.apiKey = localStorage.getItem('gemini_api_key') || '';
-  state.model = localStorage.getItem('gemini_model') || 'gemini-2.5-flash';
+  state.model = localStorage.getItem('gemini_model') || 'gemini-3.8-flash';
   state.customInstructions = localStorage.getItem('gemini_instructions') || '';
 
   const keyInput = document.getElementById('api-key-input');
+  const clearKeyBtn = document.getElementById('clear-key-btn');
+  const securityNote = document.getElementById('key-security-note');
   const modelSelect = document.getElementById('model-select');
   const instructionsInput = document.getElementById('custom-instructions');
   const modelTag = document.getElementById('model-tag');
 
-  if (keyInput) keyInput.value = state.apiKey;
+  if (state.apiKey) {
+    keyInput.value = maskApiKey(state.apiKey);
+    keyInput.disabled = true;
+    keyInput.type = 'text'; // Safe because it's masked with bullets
+    if (clearKeyBtn) clearKeyBtn.classList.remove('hidden');
+    if (securityNote) {
+      securityNote.innerHTML = '🔒 <strong>Key Saved & Protected:</strong> The raw key is masked and never exposed in the UI.';
+      securityNote.style.color = 'var(--accent-green)';
+    }
+  } else {
+    keyInput.value = '';
+    keyInput.disabled = false;
+    keyInput.type = 'password';
+    if (clearKeyBtn) clearKeyBtn.classList.add('hidden');
+    if (securityNote) {
+      securityNote.innerHTML = 'Get your key from <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Google AI Studio</a>. Keys are stored locally on your machine and never sent anywhere except directly to Google\'s API.';
+      securityNote.style.color = '';
+    }
+  }
+
   if (modelSelect) modelSelect.value = state.model;
   if (instructionsInput) instructionsInput.value = state.customInstructions;
   if (modelTag) modelTag.textContent = state.model;
@@ -696,34 +725,51 @@ function saveSettings() {
   const modelSelect = document.getElementById('model-select');
   const instructionsInput = document.getElementById('custom-instructions');
 
-  state.apiKey = keyInput.value.trim();
-  state.model = modelSelect.value;
+  // If input was enabled and modified
+  if (!keyInput.disabled) {
+    const rawVal = keyInput.value.trim();
+    if (rawVal && !rawVal.includes('••')) {
+      state.apiKey = rawVal;
+      localStorage.setItem('gemini_api_key', state.apiKey);
+    } else if (!rawVal) {
+      state.apiKey = '';
+      localStorage.removeItem('gemini_api_key');
+    }
+  }
+
+  state.model = modelSelect.value || 'gemini-3.8-flash';
   state.customInstructions = instructionsInput.value.trim();
 
-  localStorage.setItem('gemini_api_key', state.apiKey);
   localStorage.setItem('gemini_model', state.model);
   localStorage.setItem('gemini_instructions', state.customInstructions);
 
   document.getElementById('model-tag').textContent = state.model;
   closeSettingsModal();
+  loadSavedSettings();
   updateUI();
   showToast('Settings saved successfully!');
 }
 
 async function testApiKeyConnection() {
-  const keyInput = document.getElementById('api-key-input').value.trim();
+  const keyInput = document.getElementById('api-key-input');
   const statusMsg = document.getElementById('test-key-status');
-  if (!keyInput) {
+  
+  // Use state.apiKey if input is masked/disabled, otherwise use entered value
+  const keyToTest = (keyInput.disabled || !keyInput.value.trim() || keyInput.value.includes('••')) 
+    ? state.apiKey 
+    : keyInput.value.trim();
+
+  if (!keyToTest) {
     statusMsg.textContent = '❌ Please enter an API key first.';
     statusMsg.style.color = 'var(--accent-red)';
     return;
   }
 
-  statusMsg.textContent = '⏳ Testing connection...';
+  statusMsg.textContent = '⏳ Testing connection with gemini-3.8-flash...';
   statusMsg.style.color = 'var(--accent-blue)';
 
   try {
-    const testUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(keyInput)}`;
+    const testUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${encodeURIComponent(keyToTest)}`;
     const res = await fetch(testUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -733,7 +779,7 @@ async function testApiKeyConnection() {
     });
 
     if (res.ok) {
-      statusMsg.textContent = '✅ Connected successfully to Google AI Studio!';
+      statusMsg.textContent = '✅ Connected successfully to Google AI Studio (gemini-3.8-flash)!';
       statusMsg.style.color = 'var(--accent-green)';
     } else {
       const err = await res.json().catch(() => ({}));
@@ -792,18 +838,24 @@ function initDOMListeners() {
   document.getElementById('save-settings-btn').addEventListener('click', saveSettings);
   document.getElementById('test-key-btn').addEventListener('click', testApiKeyConnection);
 
-  // Toggle API Key visibility
-  const toggleKeyBtn = document.getElementById('toggle-key-visibility');
+  // Change/Clear API Key action
+  const clearKeyBtn = document.getElementById('clear-key-btn');
   const keyInput = document.getElementById('api-key-input');
-  toggleKeyBtn.addEventListener('click', () => {
-    if (keyInput.type === 'password') {
-      keyInput.type = 'text';
-      toggleKeyBtn.textContent = 'Hide';
-    } else {
+  const securityNote = document.getElementById('key-security-note');
+
+  if (clearKeyBtn) {
+    clearKeyBtn.addEventListener('click', () => {
+      keyInput.disabled = false;
+      keyInput.value = '';
       keyInput.type = 'password';
-      toggleKeyBtn.textContent = 'Show';
-    }
-  });
+      keyInput.focus();
+      clearKeyBtn.classList.add('hidden');
+      if (securityNote) {
+        securityNote.innerHTML = 'Enter a new Google AI Studio API key and click <strong>Save Settings</strong>.';
+        securityNote.style.color = 'var(--text-secondary)';
+      }
+    });
+  }
 
   // Scan Slide Button
   document.getElementById('refresh-slide-btn').addEventListener('click', () => {
