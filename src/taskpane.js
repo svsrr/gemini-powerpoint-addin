@@ -4,9 +4,18 @@
  */
 
 // Application State
+const getInitialModel = () => {
+  const m = localStorage.getItem('gemini_model');
+  if (!m || m.includes('2.5') || m.includes('2.0')) {
+    localStorage.setItem('gemini_model', 'gemini-3.8-flash');
+    return 'gemini-3.8-flash';
+  }
+  return m;
+};
+
 const state = {
   apiKey: localStorage.getItem('gemini_api_key') || '',
-  model: localStorage.getItem('gemini_model') || 'gemini-3.8-flash',
+  model: getInitialModel(),
   customInstructions: localStorage.getItem('gemini_instructions') || '',
   isOfficeReady: false,
   isPowerPoint: false,
@@ -329,6 +338,29 @@ async function callGeminiApi({ prompt, systemInstruction, jsonOutput = false }) 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       const msg = errorData.error?.message || `HTTP error ${response.status}: ${response.statusText}`;
+
+      // Auto-fallback if the previously selected model was deprecated
+      if ((msg.includes('no longer available') || msg.includes('not found')) && model !== 'gemini-3.8-flash') {
+        console.warn(`Model ${model} deprecated, switching automatically to gemini-3.8-flash...`);
+        state.model = 'gemini-3.8-flash';
+        localStorage.setItem('gemini_model', 'gemini-3.8-flash');
+        const tag = document.getElementById('model-tag');
+        if (tag) tag.textContent = 'gemini-3.8-flash';
+
+        const retryUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${encodeURIComponent(state.apiKey)}`;
+        const retryRes = await fetch(retryUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(requestBody)
+        });
+
+        if (retryRes.ok) {
+          const retryData = await retryRes.json();
+          const retryText = retryData.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (retryText) return retryText;
+        }
+      }
+
       throw new Error(msg);
     }
 
@@ -685,7 +717,7 @@ function maskApiKey(key) {
 
 function loadSavedSettings() {
   state.apiKey = localStorage.getItem('gemini_api_key') || '';
-  state.model = localStorage.getItem('gemini_model') || 'gemini-3.8-flash';
+  state.model = getInitialModel();
   state.customInstructions = localStorage.getItem('gemini_instructions') || '';
 
   const keyInput = document.getElementById('api-key-input');
