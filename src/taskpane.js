@@ -379,6 +379,11 @@ async function executeChangeTextColor({ searchText = '', newColor = '#000000' })
             if (isMatch && cellText.length > 0) {
               const cell = table.getCellOrNullObject(r, c);
               cell.font.color = newColor;
+              try {
+                cell.textRuns = [{ text: cellText, font: { color: newColor } }];
+              } catch (runErr) {
+                console.warn('textRuns update error:', runErr);
+              }
               updatedCount++;
             }
           }
@@ -505,6 +510,50 @@ async function executeReplaceSlideText({ findText, replaceText }) {
 
 function escapeRegex(string) {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Accurately extracts the target hex color from natural user sentences like:
+ * "change color of the remarks text to black instead of green" -> "#000000"
+ */
+function extractTargetColor(text) {
+  const lower = (text || '').toLowerCase();
+  const map = {
+    black: '#000000',
+    red: '#DC2626',
+    blue: '#2563EB',
+    green: '#16A34A',
+    emerald: '#059669',
+    white: '#FFFFFF',
+    gray: '#4B5563',
+    grey: '#4B5563',
+    orange: '#EA580C',
+    yellow: '#CA8A04',
+    purple: '#7C3AED'
+  };
+  
+  // 1. Check 'to <color>', 'into <color>', 'with <color>' (e.g. 'to black instead of green')
+  const toMatch = lower.match(/(?:to|into|with)\s+(#?[a-z0-9]+)/i);
+  if (toMatch) {
+    const c = toMatch[1].trim();
+    if (map[c]) return map[c];
+    if (c.startsWith('#')) return c;
+  }
+
+  // 2. Check 'make/turn/recolor ... <targetColor>'
+  const actionMatch = lower.match(/(?:make|turn|recolor)\s+.*?\b(black|white|red|blue|green|gray|grey|emerald)\b(?:\s+(?:instead|from|rather)|\s*$)/i);
+  if (actionMatch) {
+    if (map[actionMatch[1]]) return map[actionMatch[1]];
+  }
+
+  // 3. Contextual checks: if user explicitly wants black (e.g. 'black instead of green' or 'turn remarks black')
+  if (lower.includes('black')) return '#000000';
+  if (lower.includes('red') && !lower.includes('instead of red')) return '#DC2626';
+  if (lower.includes('blue') && !lower.includes('instead of blue')) return '#2563EB';
+  if (lower.includes('white') && !lower.includes('instead of white')) return '#FFFFFF';
+  if (lower.includes('green') && !lower.includes('instead of green') && !lower.includes('from green')) return '#16A34A';
+
+  return '#000000';
 }
 
 // ============================================================================
@@ -935,11 +984,8 @@ async function handleSendChatMessage() {
   const loadingBubble = appendChatMessage('assistant', 'Modifying slide in PowerPoint...', true);
 
   if (isColorChangeIntent) {
-    let targetColor = '#000000';
-    if (lowerUserText.includes('red')) targetColor = '#DC2626';
-    else if (lowerUserText.includes('blue')) targetColor = '#2563EB';
-    else if (lowerUserText.includes('green')) targetColor = '#16A34A';
-    else if (lowerUserText.includes('white')) targetColor = '#FFFFFF';
+    const targetColor = extractTargetColor(userText);
+    const colorName = targetColor === '#000000' ? 'black' : targetColor;
 
     let targetSearch = 'remarks';
     if (lowerUserText.includes('status')) targetSearch = 'status';
@@ -952,7 +998,7 @@ async function handleSendChatMessage() {
     });
     
     if (res.success && res.updatedCount > 0) {
-      const successMsg = `✅ **Directly applied to your slide!** I changed the font color of ${res.updatedCount} remark/status items to \`${targetColor}\` directly inside the table on this slide.`;
+      const successMsg = `✅ **Directly applied to your slide!** I changed the font color of ${res.updatedCount} remark/status items to **${colorName}** (\`${targetColor}\`) directly inside the table on this slide.`;
       state.chatHistory.push({ role: 'user', parts: [{ text: userText }] });
       state.chatHistory.push({ role: 'model', parts: [{ text: successMsg }] });
       updateAssistantBubble(loadingBubble, successMsg);
