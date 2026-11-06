@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "validate": "npx office-addin-manifest validate manifest.xml"
+    "validate": "npx office-addin-manifest validate manifest.xml",
+    "deploy:cloudflare": "npm run build && npx wrangler pages deploy dist"
   },
   "keywords": [
     "office-addin",
