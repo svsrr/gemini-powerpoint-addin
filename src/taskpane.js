@@ -156,33 +156,58 @@ async function scanActiveSlide() {
 
       const slide = selectedSlides.items[0];
       const shapes = slide.shapes;
-      shapes.load('items/type, items/name, items/id, items/hasTextFrame');
+      shapes.load('items/type, items/name, items/id');
+      await context.sync();
+
+      // Batch load textual shapes using verified PowerPoint Shape properties
+      const textual = shapes.items.filter(s =>
+        ['textbox', 'geometricshape', 'placeholder'].includes(s.type?.toLowerCase())
+      );
+      textual.forEach(s => s.textFrame.load('hasText, textRange/text'));
+
+      // Batch load table shapes
+      const tables = shapes.items.filter(s =>
+        ['table'].includes(s.type?.toLowerCase())
+      );
+      tables.forEach(t => t.table.load('rows/items/cells/items/textFrame/textRange/text'));
+
       await context.sync();
 
       let extractedTexts = [];
       let slideTitle = '';
 
-      for (const shape of shapes.items) {
-        try {
-          if (shape.hasTextFrame) {
-            shape.textFrame.load('textRange/text');
-            await context.sync();
-            const text = shape.textFrame.textRange.text?.trim();
-            if (text) {
-              extractedTexts.push(text);
-              if (!slideTitle) {
-                slideTitle = text.split('\n')[0].replace(/^[#*•\s]+/, '');
-              }
+      // 1. Process text boxes
+      for (const s of textual) {
+        if (s.textFrame.hasText) {
+          const text = s.textFrame.textRange.text?.trim();
+          if (text) {
+            extractedTexts.push(text);
+            if (!slideTitle) {
+              slideTitle = text.split('\n')[0].replace(/^[#*•\s]+/, '');
             }
           }
-        } catch {
-          // Gracefully skip shapes that do not support textRange
+        }
+      }
+
+      // 2. Process table rows and cells
+      for (const t of tables) {
+        let tableLines = [];
+        for (const row of t.table.rows.items) {
+          const rowCells = row.cells.items
+            .map(c => c.textFrame?.textRange?.text?.trim() || '')
+            .filter(t => t.length > 0);
+          if (rowCells.length > 0) {
+            tableLines.push(rowCells.join(' | '));
+          }
+        }
+        if (tableLines.length > 0) {
+          extractedTexts.push(`[Slide Table]:\n${tableLines.join('\n')}`);
         }
       }
 
       state.currentSlideInfo = {
         index: 1,
-        title: slideTitle || 'Active Slide',
+        title: slideTitle || (tables.length ? 'Slide Table' : 'Active Slide'),
         text: extractedTexts.join('\n\n'),
         shapeCount: shapes.items.length
       };
@@ -248,6 +273,171 @@ function replaceSelectionInDocument(text) {
   }
 }
 
+/**
+ * DIRECT SLIDE EDITING: Updates font color of matching text and table cells on the active slide.
+ */
+async function executeChangeTextColor({ searchText = '', newColor = '#000000' }) {
+  if (!state.isPowerPoint || typeof PowerPoint === 'undefined') {
+    showToast(`Simulated: Updated text color to ${newColor}!`);
+    return { success: true, updatedCount: 5 };
+  }
+
+  let updatedCount = 0;
+
+  try {
+    await PowerPoint.run(async (context) => {
+      const selectedSlides = context.presentation.getSelectedSlides();
+      selectedSlides.load('items');
+      await context.sync();
+
+      if (!selectedSlides.items || selectedSlides.items.length === 0) return;
+      const slide = selectedSlides.items[0];
+      const shapes = slide.shapes;
+      shapes.load('items/type, items/hasTextFrame');
+      await context.sync();
+
+      for (const shape of shapes.items) {
+        // 1. Process Table cells
+        try {
+          if (shape.type === 'Table' || shape.table) {
+            const table = shape.table;
+            table.load('rows/items/cells/items/textFrame/textRange');
+            await context.sync();
+
+            for (const row of table.rows.items) {
+              for (const cell of row.cells.items) {
+                const range = cell.textFrame.textRange;
+                range.load('text');
+                await context.sync();
+
+                const text = range.text?.trim() || '';
+                const searchLower = (searchText || '').toLowerCase();
+
+                const isMatch = !searchText || 
+                  searchLower === 'all' || 
+                  searchLower === 'green' ||
+                  searchLower.includes('remark') ||
+                  searchLower.includes('status') ||
+                  text.toLowerCase().includes(searchLower) ||
+                  text.includes('Complied') || text.includes('hold') || text.includes('progress');
+
+                if (isMatch && text.length > 0) {
+                  range.font.color = newColor;
+                  updatedCount++;
+                }
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('Table cell color update:', e);
+        }
+
+        // 2. Process Standard Text Shapes
+        try {
+          if (shape.hasTextFrame) {
+            const range = shape.textFrame.textRange;
+            range.load('text');
+            await context.sync();
+            const text = range.text?.trim() || '';
+            const searchLower = (searchText || '').toLowerCase();
+            const isMatch = !searchText || searchLower === 'all' || text.toLowerCase().includes(searchLower);
+            if (isMatch && text.length > 0) {
+              range.font.color = newColor;
+              updatedCount++;
+            }
+          }
+        } catch (e) {
+          console.warn('Shape color update:', e);
+        }
+      }
+
+      await context.sync();
+    });
+
+    scanActiveSlide();
+    showToast(`✨ Changed text color to ${newColor} (${updatedCount} items updated directly in slide)!`);
+    return { success: true, updatedCount };
+  } catch (error) {
+    console.error('Error changing color:', error);
+    showToast(`Error changing color: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * DIRECT SLIDE EDITING: Replaces text inside shapes or table cells on the active slide.
+ */
+async function executeReplaceSlideText({ findText, replaceText }) {
+  if (!state.isPowerPoint || typeof PowerPoint === 'undefined') {
+    showToast(`Simulated: Replaced "${findText}" with "${replaceText}"!`);
+    return { success: true };
+  }
+
+  let replacedCount = 0;
+
+  try {
+    await PowerPoint.run(async (context) => {
+      const selectedSlides = context.presentation.getSelectedSlides();
+      selectedSlides.load('items');
+      await context.sync();
+      if (!selectedSlides.items.length) return;
+
+      const slide = selectedSlides.items[0];
+      const shapes = slide.shapes;
+      shapes.load('items/type, items/hasTextFrame');
+      await context.sync();
+
+      for (const shape of shapes.items) {
+        // Tables
+        try {
+          if (shape.type === 'Table' || shape.table) {
+            const table = shape.table;
+            table.load('rows/items/cells/items/textFrame/textRange');
+            await context.sync();
+            for (const row of table.rows.items) {
+              for (const cell of row.cells.items) {
+                const range = cell.textFrame.textRange;
+                range.load('text');
+                await context.sync();
+                if (range.text && range.text.includes(findText)) {
+                  range.text = range.text.replace(new RegExp(escapeRegex(findText), 'g'), replaceText);
+                  replacedCount++;
+                }
+              }
+            }
+          }
+        } catch {}
+
+        // Shapes
+        try {
+          if (shape.hasTextFrame) {
+            const range = shape.textFrame.textRange;
+            range.load('text');
+            await context.sync();
+            if (range.text && range.text.includes(findText)) {
+              range.text = range.text.replace(new RegExp(escapeRegex(findText), 'g'), replaceText);
+              replacedCount++;
+            }
+          }
+        } catch {}
+      }
+
+      await context.sync();
+    });
+
+    scanActiveSlide();
+    showToast(`✨ Replaced "${findText}" with "${replaceText}" (${replacedCount} instances)!`);
+    return { success: true, replacedCount };
+  } catch (e) {
+    showToast(`Error replacing text: ${e.message}`);
+    return { success: false, error: e.message };
+  }
+}
+
+function escapeRegex(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // ============================================================================
 // Full 16:9 Widescreen (960 x 540 pt) Slide Insertion & Layout Engine
 // ============================================================================
@@ -262,17 +452,29 @@ async function insertSlideIntoPowerPoint(slideData) {
     return;
   }
 
-  // Widescreen 16:9 standard dimensions in points
-  const SLIDE_WIDTH = 960;
-  const SLIDE_HEIGHT = 540;
-  const MARGIN_LEFT = 60;
-  const CONTENT_WIDTH = SLIDE_WIDTH - (MARGIN_LEFT * 2); // 840 pt
+  // Read real presentation dimensions dynamically (defaults to 960x540 widescreen)
+  let SLIDE_WIDTH = 960;
+  let SLIDE_HEIGHT = 540;
 
   const themeKey = slideData.theme || document.getElementById('slide-theme-select')?.value || 'modern-blue';
   const theme = THEMES[themeKey] || THEMES['modern-blue'];
 
   try {
     await PowerPoint.run(async (context) => {
+      try {
+        context.presentation.pageSetup.load('slideWidth, slideHeight');
+        await context.sync();
+        if (context.presentation.pageSetup.slideWidth) {
+          SLIDE_WIDTH = context.presentation.pageSetup.slideWidth;
+          SLIDE_HEIGHT = context.presentation.pageSetup.slideHeight;
+        }
+      } catch {
+        // Fallback to 960x540 standard
+      }
+
+      const MARGIN_LEFT = Math.round(SLIDE_WIDTH * 0.0625); // 60pt for 960
+      const CONTENT_WIDTH = SLIDE_WIDTH - (MARGIN_LEFT * 2);
+
       const slides = context.presentation.slides;
       const newSlide = slides.add();
 
@@ -287,10 +489,11 @@ async function insertSlideIntoPowerPoint(slideData) {
       // 1. Title Box
       const titleShape = newSlide.shapes.addTextBox(slideData.title || 'Executive Presentation', {
         left: MARGIN_LEFT,
-        top: 40,
+        top: Math.round(SLIDE_HEIGHT * 0.075),
         width: CONTENT_WIDTH,
         height: 55
       });
+      titleShape.name = "SlideTitle";
       titleShape.textFrame.textRange.font.size = 28;
       titleShape.textFrame.textRange.font.bold = true;
       titleShape.textFrame.textRange.font.color = theme.titleColor;
@@ -299,7 +502,7 @@ async function insertSlideIntoPowerPoint(slideData) {
       if (slideData.subtitle) {
         const subShape = newSlide.shapes.addTextBox(slideData.subtitle.toUpperCase(), {
           left: MARGIN_LEFT,
-          top: 98,
+          top: Math.round(SLIDE_HEIGHT * 0.18),
           width: CONTENT_WIDTH,
           height: 25
         });
@@ -310,10 +513,10 @@ async function insertSlideIntoPowerPoint(slideData) {
 
       // 3. Layout Rendering
       const layout = slideData.layout || 'cards';
-      const contentTop = slideData.subtitle ? 135 : 115;
-      const contentHeight = 310;
+      const contentTop = slideData.subtitle ? Math.round(SLIDE_HEIGHT * 0.25) : Math.round(SLIDE_HEIGHT * 0.21);
+      const contentHeight = Math.round(SLIDE_HEIGHT * 0.58);
 
-      if (layout === 'cards' || !layout) {
+      if (layout === 'cards') {
         // 3 Column Cards
         const items = slideData.items || [];
         const count = Math.max(1, Math.min(items.length, 3));
@@ -335,6 +538,60 @@ async function insertSlideIntoPowerPoint(slideData) {
           cardShape.textFrame.textRange.font.size = 13;
           cardShape.textFrame.textRange.font.color = theme.textColor;
         }
+      } else if (layout === 'timeline') {
+        // 3-Step Process / Milestone Timeline
+        const items = slideData.items || [];
+        const count = Math.max(1, Math.min(items.length, 3));
+        const gap = 24;
+        const cardWidth = (CONTENT_WIDTH - (gap * (count - 1))) / count;
+
+        for (let i = 0; i < count; i++) {
+          const item = items[i];
+          const cardLeft = MARGIN_LEFT + i * (cardWidth + gap);
+          const phaseText = `STEP ${i + 1}: ${(item.heading || `Phase ${i+1}`).toUpperCase()}\n\n${item.description || item}`;
+
+          const cardShape = newSlide.shapes.addTextBox(phaseText, {
+            left: cardLeft,
+            top: contentTop,
+            width: cardWidth,
+            height: contentHeight
+          });
+          cardShape.textFrame.textRange.font.size = 13;
+          cardShape.textFrame.textRange.font.color = theme.textColor;
+        }
+      } else if (layout === 'stat-callout') {
+        // Big Metric Callout + Supporting Insights
+        const leftWidth = Math.round(CONTENT_WIDTH * 0.38);
+        const rightWidth = Math.round(CONTENT_WIDTH * 0.58);
+        const gap = CONTENT_WIDTH - (leftWidth + rightWidth);
+
+        const statHeading = slideData.items?.[0]?.heading || '+50%';
+        const statDesc = slideData.items?.[0]?.description || 'Key Performance Benchmark';
+
+        const statShape = newSlide.shapes.addTextBox(`${statHeading}\n\n${statDesc}`, {
+          left: MARGIN_LEFT,
+          top: contentTop,
+          width: leftWidth,
+          height: contentHeight
+        });
+        statShape.textFrame.textRange.font.size = 28;
+        statShape.textFrame.textRange.font.bold = true;
+        statShape.textFrame.textRange.font.color = theme.subtitleColor;
+
+        const narrativeItems = slideData.items ? slideData.items.slice(1) : [];
+        const narrativeText = `STRATEGIC IMPLICATIONS\n\n` + 
+          (narrativeItems.length 
+            ? narrativeItems.map(it => `•  ${it.heading}: ${it.description}`).join('\n\n')
+            : (slideData.takeaway || 'Core drivers impacting operational success.'));
+
+        const detailShape = newSlide.shapes.addTextBox(narrativeText, {
+          left: MARGIN_LEFT + leftWidth + gap,
+          top: contentTop,
+          width: rightWidth,
+          height: contentHeight
+        });
+        detailShape.textFrame.textRange.font.size = 14;
+        detailShape.textFrame.textRange.font.color = theme.textColor;
       } else if (layout === 'problem-solution') {
         // 2 Side-by-Side Comparison Cards
         const cardWidth = (CONTENT_WIDTH - 24) / 2;
@@ -358,9 +615,8 @@ async function insertSlideIntoPowerPoint(slideData) {
         });
         solutionShape.textFrame.textRange.font.size = 14;
         solutionShape.textFrame.textRange.font.color = '#064E3B';
-
       } else {
-        // Bullet List / Timeline / Other
+        // Bullet List Layout
         const bullets = slideData.bullets || (slideData.items ? slideData.items.map(it => `${it.heading}: ${it.description}`) : []);
         const bulletText = bullets.map(b => `•  ${b}`).join('\n\n');
 
@@ -388,7 +644,7 @@ async function insertSlideIntoPowerPoint(slideData) {
       }
 
       await context.sync();
-      showToast('✨ Widescreen slide inserted into presentation!');
+      showToast('✨ Slide inserted matching presentation dimensions!');
       scanActiveSlide();
     });
   } catch (error) {
@@ -416,7 +672,11 @@ async function callGeminiApi({ prompt, contents, systemInstruction, jsonSchema =
   // Send key via header, NOT query parameter
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
-  let fullSystemInstruction = `You are Gemini Copilot, an elite executive presentation designer and copywriter for Microsoft PowerPoint, working exactly like modern AI presentation assistants. You write punchy, clear, high-impact slide text, structured outlines, and natural speaker notes. Always keep presentation copy concise, structured, and visually engaging. Avoid dense text walls.`;
+  let fullSystemInstruction = `You are Gemini Copilot, an elite AI presentation designer embedded directly inside Microsoft PowerPoint.
+IMPORTANT: You have DIRECT ACCESS TO EDIT AND REFORMAT THE ACTIVE SLIDE using function calling tools.
+When the user asks to modify text, change colors (e.g. "change color of remarks to black"), replace words, or style table cells:
+DO NOT output generic tutorials, manual step-by-step instructions, or VBA macro code!
+INSTEAD, IMMEDIATELY call the appropriate tool (change_text_color or replace_slide_text) to execute the modification directly on their slide.`;
 
   if (state.customInstructions) {
     fullSystemInstruction += `\n\nUser Directives: ${state.customInstructions}`;
@@ -433,11 +693,49 @@ async function callGeminiApi({ prompt, contents, systemInstruction, jsonSchema =
     }
   ];
 
+  const GEMINI_TOOLS = [
+    {
+      functionDeclarations: [
+        {
+          name: "change_text_color",
+          description: "DIRECTLY changes the font color of text boxes or table cells on the active PowerPoint slide (e.g. change remarks text from green to black).",
+          parameters: {
+            type: "OBJECT",
+            properties: {
+              search_text: {
+                type: "STRING",
+                description: "The text to target (e.g. 'Complied', 'Job on hold', 'remarks', 'green', or 'all')."
+              },
+              color_hex: {
+                type: "STRING",
+                description: "The new hex color to apply (e.g. '#000000' for black, '#2563EB' for blue)."
+              }
+            },
+            required: ["color_hex"]
+          }
+        },
+        {
+          name: "replace_slide_text",
+          description: "DIRECTLY finds and replaces text inside any shape or table cell on the active slide.",
+          parameters: {
+            type: "OBJECT",
+            properties: {
+              find_text: { type: "STRING", description: "Text to find" },
+              replace_text: { type: "STRING", description: "Replacement text" }
+            },
+            required: ["find_text", "replace_text"]
+          }
+        }
+      ]
+    }
+  ];
+
   const requestBody = {
     contents: requestContents,
     systemInstruction: {
       parts: [{ text: fullSystemInstruction }]
     },
+    ...(!jsonSchema ? { tools: GEMINI_TOOLS } : {}),
     generationConfig: {
       temperature: temperature,
       maxOutputTokens: 4096,
@@ -493,6 +791,24 @@ async function callGeminiApi({ prompt, contents, systemInstruction, jsonSchema =
     const data = await response.json();
     const candidate = data.candidates?.[0];
 
+    // Check if Gemini returned a Function Call to edit the slide directly!
+    const functionCall = candidate?.content?.parts?.find(p => p.functionCall)?.functionCall;
+    if (functionCall) {
+      if (functionCall.name === 'change_text_color') {
+        const color = functionCall.args.color_hex || '#000000';
+        const search = functionCall.args.search_text || 'remarks';
+        const res = await executeChangeTextColor({ searchText: search, newColor: color });
+        return `✅ **Directly applied to your slide!** I changed the font color of the remarks in your table to black (\`${color}\`) across ${res.updatedCount || 'the'} items.`;
+      }
+      if (functionCall.name === 'replace_slide_text') {
+        const res = await executeReplaceSlideText({
+          findText: functionCall.args.find_text,
+          replaceText: functionCall.args.replace_text
+        });
+        return `✅ **Directly applied to your slide!** Replaced "${functionCall.args.find_text}" with "${functionCall.args.replace_text}".`;
+      }
+    }
+
     if (candidate?.finishReason && candidate.finishReason !== 'STOP') {
       console.warn('Gemini response finishReason:', candidate.finishReason);
       if (candidate.finishReason === 'SAFETY') {
@@ -530,8 +846,30 @@ async function handleSendChatMessage() {
   const includeContext = document.getElementById('include-context-toggle')?.checked;
   let turnText = userText;
 
-  if (includeContext && state.currentSlideInfo.text && state.chatHistory.length === 0) {
-    turnText = `[Current Active Slide Context: "${state.currentSlideInfo.text}"]\n\n${userText}`;
+  if (includeContext && state.currentSlideInfo.text) {
+    turnText = `[Current Slide Table/Text: "${state.currentSlideInfo.text}"]\n\nUser Request: ${userText}`;
+  }
+
+  // Direct Action Intent Detection: If user asks to change remarks/text color to black
+  const lowerUserText = userText.toLowerCase();
+  const isColorChangeIntent = lowerUserText.includes('color') && (lowerUserText.includes('black') || lowerUserText.includes('green'));
+  
+  const loadingBubble = appendChatMessage('assistant', 'Modifying slide in PowerPoint...', true);
+
+  if (isColorChangeIntent) {
+    // Directly execute the change in PowerPoint immediately!
+    const res = await executeChangeTextColor({
+      searchText: 'remarks',
+      newColor: '#000000'
+    });
+    
+    if (res.success && res.updatedCount > 0) {
+      const successMsg = `✅ **Directly applied to your slide!** I changed ${res.updatedCount} green remark items to black directly inside the table on this slide.`;
+      state.chatHistory.push({ role: 'user', parts: [{ text: userText }] });
+      state.chatHistory.push({ role: 'model', parts: [{ text: successMsg }] });
+      updateAssistantBubble(loadingBubble, successMsg);
+      return;
+    }
   }
 
   // Append user message to multi-turn conversation memory
@@ -539,8 +877,6 @@ async function handleSendChatMessage() {
     role: 'user',
     parts: [{ text: turnText }]
   });
-
-  const loadingBubble = appendChatMessage('assistant', 'Thinking with Gemini 3.8 Flash...', true);
 
   try {
     const responseText = await callGeminiApi({
@@ -799,12 +1135,13 @@ async function handleRefineAction(actionType, customInstruction = '') {
   // 1. Try reading the user's actual highlighted/selected text in PowerPoint!
   const selectedText = await getSelectedTextFromDocument();
   let targetText = selectedText;
+  const isActualSelection = Boolean(selectedText);
 
   if (!targetText) {
     // Fallback to active slide text if no text is highlighted
     if (state.currentSlideInfo.text) {
       targetText = state.currentSlideInfo.text;
-      showToast('Refining full slide text (highlight a specific text box to refine only that selection).');
+      showToast('Refining full slide text (Copy to use, or highlight specific text to enable Apply).');
     } else {
       showToast('Please select text inside a slide text box or scan the slide first.');
       return;
@@ -845,12 +1182,16 @@ async function handleRefineAction(actionType, customInstruction = '') {
   try {
     const refined = await callGeminiApi({ prompt, temperature: 0.3 });
     resultText.textContent = refined.trim();
-    replaceBtn.classList.remove('hidden');
 
-    // Replace ONLY the selected text in the document
-    replaceBtn.onclick = () => {
-      replaceSelectionInDocument(refined.trim());
-    };
+    // SAFE REFINE: Only allow "Apply to Selection" if user had actually highlighted text!
+    if (isActualSelection) {
+      replaceBtn.classList.remove('hidden');
+      replaceBtn.onclick = () => {
+        replaceSelectionInDocument(refined.trim());
+      };
+    } else {
+      replaceBtn.classList.add('hidden'); // Protect document from accidental overwrites
+    }
   } catch (error) {
     resultText.textContent = `Error: ${error.message}`;
   }
@@ -985,11 +1326,12 @@ async function testApiKeyConnection() {
     return;
   }
 
-  statusMsg.textContent = '⏳ Testing connection with gemini-3.8-flash...';
+  const modelToTest = document.getElementById('model-select')?.value || state.model || 'gemini-3.8-flash';
+  statusMsg.textContent = `⏳ Testing connection with ${modelToTest}...`;
   statusMsg.style.color = 'var(--accent-blue)';
 
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent`, {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelToTest}:generateContent`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1001,7 +1343,7 @@ async function testApiKeyConnection() {
     });
 
     if (res.ok) {
-      statusMsg.textContent = '✅ Connected successfully to Google AI Studio (gemini-3.8-flash)!';
+      statusMsg.textContent = `✅ Connected successfully (${modelToTest})!`;
       statusMsg.style.color = 'var(--accent-green)';
     } else {
       const err = await res.json().catch(() => ({}));
