@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 
-  <script type="module" crossorigin src="/assets/taskpane-CF94Oz_Z.js"></script>
+  <script type="module" crossorigin src="/assets/taskpane-CeNh43Cf.js"></script>
   <link rel="stylesheet" crossorigin href="/assets/taskpane-BV9nQfII.css">
 </head>
 <body>
@@ -129,7 +129,10 @@
               <input type="checkbox" id="include-context-toggle" checked />
               <span>Include slide context</span>
             </label>
-            <button id="clear-chat-btn" class="text-btn" title="Clear conversation">Clear</button>
+            <div style="display:flex; gap:6px; align-items:center;">
+              <button id="undo-btn" class="text-btn" style="display:none; color:var(--primary); font-weight:600;" title="Undo last AI slide edit">↩ Undo</button>
+              <button id="clear-chat-btn" class="text-btn" title="Clear conversation">Clear</button>
+            </div>
           </div>
           <div class="chat-input-row">
             <textarea id="chat-input" rows="1" placeholder="Ask Gemini or prompt slide changes... (Shift+Enter for newline)" autofocus></textarea>

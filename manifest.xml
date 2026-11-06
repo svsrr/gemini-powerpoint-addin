@@ -29,6 +29,13 @@
     <Host Name="Presentation" />
   </Hosts>
 
+  <!-- PowerPoint API set requirement for advanced table and shape editing -->
+  <Requirements>
+    <Sets DefaultMinVersion="1.8">
+      <Set Name="PowerPointApi" MinVersion="1.8" />
+    </Sets>
+  </Requirements>
+
   <DefaultSettings>
     <SourceLocation DefaultValue="https://ppt.distillatelabs.com/taskpane.html" />
   </DefaultSettings>
