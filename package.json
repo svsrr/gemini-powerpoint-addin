@@ -21,7 +21,9 @@
   "author": "",
   "license": "MIT",
   "devDependencies": {
+    "@types/office-js": "^1.0.616",
     "@vitejs/plugin-basic-ssl": "^1.2.0",
+    "typescript": "^7.0.2",
     "vite": "^6.1.0",
     "wrangler": "^4.158.0"
   }

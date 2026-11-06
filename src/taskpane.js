@@ -132,7 +132,7 @@ function simulateBrowserContext() {
 
 /**
  * Reads text and structure safely from the currently active slide.
- * Avoids throwing on non-text shapes (images, lines, groups).
+ * Supports both standard PowerPoint shapes (text boxes, titles) and native PowerPoint Tables!
  */
 async function scanActiveSlide() {
   if (!state.isPowerPoint || typeof PowerPoint === 'undefined') {
@@ -159,26 +159,35 @@ async function scanActiveSlide() {
       shapes.load('items/type, items/name, items/id');
       await context.sync();
 
-      // Batch load textual shapes using verified PowerPoint Shape properties
-      const textual = shapes.items.filter(s =>
-        ['textbox', 'geometricshape', 'placeholder'].includes(s.type?.toLowerCase())
+      // Separate tables and textual shapes
+      const tableShapes = shapes.items.filter(s => String(s.type || '').toLowerCase() === 'table');
+      const textualShapes = shapes.items.filter(s =>
+        ['textbox', 'geometricshape', 'placeholder'].includes(String(s.type || '').toLowerCase())
       );
-      textual.forEach(s => s.textFrame.load('hasText, textRange/text'));
 
-      // Batch load table shapes
-      const tables = shapes.items.filter(s =>
-        ['table'].includes(s.type?.toLowerCase())
-      );
-      tables.forEach(t => t.table.load('rows/items/cells/items/textFrame/textRange/text'));
+      // Load tables safely using PowerPointApi 1.8+ Table.load('rowCount, columnCount, values')
+      const loadedTables = [];
+      for (const s of tableShapes) {
+        try {
+          const tbl = s.getTable();
+          tbl.load('rowCount, columnCount, values');
+          loadedTables.push(tbl);
+        } catch (err) {
+          console.warn('Failed to load table:', err);
+        }
+      }
+
+      // Load text frames for textual shapes
+      textualShapes.forEach(s => s.textFrame.load('hasText, textRange/text'));
 
       await context.sync();
 
       let extractedTexts = [];
       let slideTitle = '';
 
-      // 1. Process text boxes
-      for (const s of textual) {
-        if (s.textFrame.hasText) {
+      // 1. Process text boxes & titles
+      for (const s of textualShapes) {
+        if (s.textFrame && s.textFrame.hasText) {
           const text = s.textFrame.textRange.text?.trim();
           if (text) {
             extractedTexts.push(text);
@@ -189,25 +198,25 @@ async function scanActiveSlide() {
         }
       }
 
-      // 2. Process table rows and cells
-      for (const t of tables) {
-        let tableLines = [];
-        for (const row of t.table.rows.items) {
-          const rowCells = row.cells.items
-            .map(c => c.textFrame?.textRange?.text?.trim() || '')
-            .filter(t => t.length > 0);
-          if (rowCells.length > 0) {
-            tableLines.push(rowCells.join(' | '));
+      // 2. Process table rows and cells from 2D values array
+      for (const tbl of loadedTables) {
+        if (tbl.values && tbl.values.length > 0) {
+          let tableLines = [];
+          for (const row of tbl.values) {
+            const rowCells = row.map(c => String(c || '').trim()).filter(c => c.length > 0);
+            if (rowCells.length > 0) {
+              tableLines.push(rowCells.join(' | '));
+            }
           }
-        }
-        if (tableLines.length > 0) {
-          extractedTexts.push(`[Slide Table]:\n${tableLines.join('\n')}`);
+          if (tableLines.length > 0) {
+            extractedTexts.push(`[Slide Table]:\n${tableLines.join('\n')}`);
+          }
         }
       }
 
       state.currentSlideInfo = {
         index: 1,
-        title: slideTitle || (tables.length ? 'Slide Table' : 'Active Slide'),
+        title: slideTitle || (loadedTables.length ? 'Slide Table' : 'Active Slide'),
         text: extractedTexts.join('\n\n'),
         shapeCount: shapes.items.length
       };
@@ -275,6 +284,7 @@ function replaceSelectionInDocument(text) {
 
 /**
  * DIRECT SLIDE EDITING: Updates font color of matching text and table cells on the active slide.
+ * Correctly navigates PowerPoint Table cells using Table.getCellOrNullObject(r, c) and cell.font.color!
  */
 async function executeChangeTextColor({ searchText = '', newColor = '#000000' }) {
   if (!state.isPowerPoint || typeof PowerPoint === 'undefined') {
@@ -293,74 +303,118 @@ async function executeChangeTextColor({ searchText = '', newColor = '#000000' })
       if (!selectedSlides.items || selectedSlides.items.length === 0) return;
       const slide = selectedSlides.items[0];
       const shapes = slide.shapes;
-      shapes.load('items/type, items/hasTextFrame');
+      shapes.load('items/type, items/name, items/id');
       await context.sync();
 
-      for (const shape of shapes.items) {
-        // 1. Process Table cells
+      const searchLower = (searchText || '').toLowerCase().trim();
+
+      // 1. Separate table shapes and textual shapes
+      const tableShapes = shapes.items.filter(s => String(s.type || '').toLowerCase() === 'table');
+      const textualShapes = shapes.items.filter(s => {
+        const t = String(s.type || '').toLowerCase();
+        return ['textbox', 'geometricshape', 'placeholder'].includes(t);
+      });
+
+      // 2. Load tables
+      const loadedTables = [];
+      for (const shape of tableShapes) {
         try {
-          if (shape.type === 'Table' || shape.table) {
-            const table = shape.table;
-            table.load('rows/items/cells/items/textFrame/textRange');
-            await context.sync();
+          const tbl = shape.getTable();
+          tbl.load('rowCount, columnCount, values');
+          loadedTables.push(tbl);
+        } catch (err) {
+          console.warn('Could not get table:', err);
+        }
+      }
 
-            for (const row of table.rows.items) {
-              for (const cell of row.cells.items) {
-                const range = cell.textFrame.textRange;
-                range.load('text');
-                await context.sync();
+      // 3. Load textframes for textual shapes
+      for (const s of textualShapes) {
+        s.textFrame.load('hasText, textRange/text');
+      }
 
-                const text = range.text?.trim() || '';
-                const searchLower = (searchText || '').toLowerCase();
+      await context.sync();
 
-                const isMatch = !searchText || 
-                  searchLower === 'all' || 
-                  searchLower === 'green' ||
-                  searchLower.includes('remark') ||
-                  searchLower.includes('status') ||
-                  text.toLowerCase().includes(searchLower) ||
-                  text.includes('Complied') || text.includes('hold') || text.includes('progress');
+      // 4. Update table cells
+      for (const table of loadedTables) {
+        const rowCount = table.rowCount;
+        const colCount = table.columnCount;
+        const values = table.values || [];
 
-                if (isMatch && text.length > 0) {
-                  range.font.color = newColor;
-                  updatedCount++;
-                }
-              }
+        // Detect target column if user mentioned header word (e.g. remarks, status)
+        const targetCols = new Set();
+        if (values.length > 0) {
+          values[0].forEach((headerText, cIdx) => {
+            const h = String(headerText || '').toLowerCase();
+            if (
+              (searchLower.includes('remark') && h.includes('remark')) ||
+              (searchLower.includes('status') && h.includes('status')) ||
+              (searchLower && h.includes(searchLower))
+            ) {
+              targetCols.add(cIdx);
             }
-          }
-        } catch (e) {
-          console.warn('Table cell color update:', e);
+          });
         }
 
-        // 2. Process Standard Text Shapes
-        try {
-          if (shape.hasTextFrame) {
-            const range = shape.textFrame.textRange;
-            range.load('text');
-            await context.sync();
-            const text = range.text?.trim() || '';
-            const searchLower = (searchText || '').toLowerCase();
-            const isMatch = !searchText || searchLower === 'all' || text.toLowerCase().includes(searchLower);
-            if (isMatch && text.length > 0) {
-              range.font.color = newColor;
+        for (let r = 0; r < rowCount; r++) {
+          for (let c = 0; c < colCount; c++) {
+            const cellText = (values[r] && values[r][c]) ? String(values[r][c]).trim() : '';
+            const cellLower = cellText.toLowerCase();
+
+            let isMatch = false;
+            if (r === 0 && (searchLower.includes('remark') || searchLower.includes('status') || searchLower.includes('green'))) {
+              isMatch = false; // Keep table header unchanged unless explicitly asked
+            } else if (targetCols.has(c)) {
+              // This column is the targeted column (e.g. Present Status / Remarks)
+              isMatch = true;
+            } else if (!searchText || searchLower === 'all' || searchLower === 'green') {
+              isMatch = (r > 0 && cellText.length > 0) || cellLower.includes('complied') || cellLower.includes('hold') || cellLower.includes('progress');
+            } else if (
+              cellLower.includes(searchLower) ||
+              searchLower.includes(cellLower) ||
+              (searchLower.includes('remark') && (cellLower.includes('complied') || cellLower.includes('hold') || cellLower.includes('progress')))
+            ) {
+              isMatch = true;
+            }
+
+            if (isMatch && cellText.length > 0) {
+              const cell = table.getCellOrNullObject(r, c);
+              cell.font.color = newColor;
               updatedCount++;
             }
           }
-        } catch (e) {
-          console.warn('Shape color update:', e);
+        }
+      }
+
+      // 5. Update text boxes / shapes
+      for (const s of textualShapes) {
+        if (s.textFrame && s.textFrame.hasText && s.textFrame.textRange) {
+          const text = s.textFrame.textRange.text?.trim() || '';
+          const textLower = text.toLowerCase();
+          const isMatch = !searchText ||
+            searchLower === 'all' ||
+            searchLower === 'green' ||
+            (searchLower.includes('remark') && (textLower.includes('complied') || textLower.includes('hold'))) ||
+            textLower.includes(searchLower);
+
+          if (isMatch && text.length > 0) {
+            s.textFrame.textRange.font.color = newColor;
+            updatedCount++;
+          }
         }
       }
 
       await context.sync();
     });
 
-    scanActiveSlide();
-    showToast(`✨ Changed text color to ${newColor} (${updatedCount} items updated directly in slide)!`);
+    await scanActiveSlide();
+    if (updatedCount > 0) {
+      showToast(`✨ Changed text color to ${newColor} (${updatedCount} items updated directly in slide)!`);
+    }
     return { success: true, updatedCount };
   } catch (error) {
     console.error('Error changing color:', error);
     showToast(`Error changing color: ${error.message}`);
-    return { success: false, error: error.message };
+    return { success: false, error: error.message, updatedCount: 0 };
   }
 }
 
@@ -370,7 +424,7 @@ async function executeChangeTextColor({ searchText = '', newColor = '#000000' })
 async function executeReplaceSlideText({ findText, replaceText }) {
   if (!state.isPowerPoint || typeof PowerPoint === 'undefined') {
     showToast(`Simulated: Replaced "${findText}" with "${replaceText}"!`);
-    return { success: true };
+    return { success: true, replacedCount: 1 };
   }
 
   let replacedCount = 0;
@@ -380,57 +434,72 @@ async function executeReplaceSlideText({ findText, replaceText }) {
       const selectedSlides = context.presentation.getSelectedSlides();
       selectedSlides.load('items');
       await context.sync();
-      if (!selectedSlides.items.length) return;
+      if (!selectedSlides.items || selectedSlides.items.length === 0) return;
 
       const slide = selectedSlides.items[0];
       const shapes = slide.shapes;
-      shapes.load('items/type, items/hasTextFrame');
+      shapes.load('items/type, items/name, items/id');
       await context.sync();
 
-      for (const shape of shapes.items) {
-        // Tables
-        try {
-          if (shape.type === 'Table' || shape.table) {
-            const table = shape.table;
-            table.load('rows/items/cells/items/textFrame/textRange');
-            await context.sync();
-            for (const row of table.rows.items) {
-              for (const cell of row.cells.items) {
-                const range = cell.textFrame.textRange;
-                range.load('text');
-                await context.sync();
-                if (range.text && range.text.includes(findText)) {
-                  range.text = range.text.replace(new RegExp(escapeRegex(findText), 'g'), replaceText);
-                  replacedCount++;
-                }
-              }
-            }
-          }
-        } catch {}
+      // 1. Separate table shapes and textual shapes
+      const tableShapes = shapes.items.filter(s => String(s.type || '').toLowerCase() === 'table');
+      const textualShapes = shapes.items.filter(s => {
+        const t = String(s.type || '').toLowerCase();
+        return ['textbox', 'geometricshape', 'placeholder'].includes(t);
+      });
 
-        // Shapes
+      // 2. Load tables
+      const loadedTables = [];
+      for (const shape of tableShapes) {
         try {
-          if (shape.hasTextFrame) {
-            const range = shape.textFrame.textRange;
-            range.load('text');
-            await context.sync();
-            if (range.text && range.text.includes(findText)) {
-              range.text = range.text.replace(new RegExp(escapeRegex(findText), 'g'), replaceText);
+          const tbl = shape.getTable();
+          tbl.load('rowCount, columnCount, values');
+          loadedTables.push(tbl);
+        } catch (err) {
+          console.warn(err);
+        }
+      }
+
+      // 3. Load textframes for textual shapes
+      for (const s of textualShapes) {
+        s.textFrame.load('hasText, textRange/text');
+      }
+
+      await context.sync();
+
+      // 4. Update tables
+      for (const table of loadedTables) {
+        for (let r = 0; r < table.rowCount; r++) {
+          for (let c = 0; c < table.columnCount; c++) {
+            const cellText = (table.values[r] && table.values[r][c]) ? String(table.values[r][c]) : '';
+            if (cellText && cellText.includes(findText)) {
+              const cell = table.getCellOrNullObject(r, c);
+              cell.text = cellText.replace(new RegExp(escapeRegex(findText), 'g'), replaceText);
               replacedCount++;
             }
           }
-        } catch {}
+        }
+      }
+
+      // 5. Update shapes
+      for (const s of textualShapes) {
+        if (s.textFrame && s.textFrame.hasText && s.textFrame.textRange && s.textFrame.textRange.text) {
+          if (s.textFrame.textRange.text.includes(findText)) {
+            s.textFrame.textRange.text = s.textFrame.textRange.text.replace(new RegExp(escapeRegex(findText), 'g'), replaceText);
+            replacedCount++;
+          }
+        }
       }
 
       await context.sync();
     });
 
-    scanActiveSlide();
+    await scanActiveSlide();
     showToast(`✨ Replaced "${findText}" with "${replaceText}" (${replacedCount} instances)!`);
     return { success: true, replacedCount };
   } catch (e) {
     showToast(`Error replacing text: ${e.message}`);
-    return { success: false, error: e.message };
+    return { success: false, error: e.message, replacedCount: 0 };
   }
 }
 
@@ -798,14 +867,22 @@ INSTEAD, IMMEDIATELY call the appropriate tool (change_text_color or replace_sli
         const color = functionCall.args.color_hex || '#000000';
         const search = functionCall.args.search_text || 'remarks';
         const res = await executeChangeTextColor({ searchText: search, newColor: color });
-        return `✅ **Directly applied to your slide!** I changed the font color of the remarks in your table to black (\`${color}\`) across ${res.updatedCount || 'the'} items.`;
+        if (res.success && res.updatedCount > 0) {
+          return `✅ **Directly applied to your slide!** I updated the font color to \`${color}\` across ${res.updatedCount} items in your slide table/shapes.`;
+        } else {
+          return `⚠️ I tried to change the font color to \`${color}\`, but found no matching items (0 updated). Please ensure the slide is selected or use the Refine tab.`;
+        }
       }
       if (functionCall.name === 'replace_slide_text') {
         const res = await executeReplaceSlideText({
           findText: functionCall.args.find_text,
           replaceText: functionCall.args.replace_text
         });
-        return `✅ **Directly applied to your slide!** Replaced "${functionCall.args.find_text}" with "${functionCall.args.replace_text}".`;
+        if (res.success && res.replacedCount > 0) {
+          return `✅ **Directly applied to your slide!** Replaced "${functionCall.args.find_text}" with "${functionCall.args.replace_text}" (${res.replacedCount} instances).`;
+        } else {
+          return `⚠️ I searched for "${functionCall.args.find_text}" on this slide, but found no matching instances to replace.`;
+        }
       }
     }
 
@@ -850,21 +927,32 @@ async function handleSendChatMessage() {
     turnText = `[Current Slide Table/Text: "${state.currentSlideInfo.text}"]\n\nUser Request: ${userText}`;
   }
 
-  // Direct Action Intent Detection: If user asks to change remarks/text color to black
+  // Direct Action Intent Detection: If user asks to change remarks/text color
   const lowerUserText = userText.toLowerCase();
-  const isColorChangeIntent = lowerUserText.includes('color') && (lowerUserText.includes('black') || lowerUserText.includes('green'));
+  const isColorChangeIntent = (lowerUserText.includes('color') || lowerUserText.includes('turn') || lowerUserText.includes('make')) &&
+    (lowerUserText.includes('black') || lowerUserText.includes('green') || lowerUserText.includes('red') || lowerUserText.includes('blue') || lowerUserText.includes('white'));
   
   const loadingBubble = appendChatMessage('assistant', 'Modifying slide in PowerPoint...', true);
 
   if (isColorChangeIntent) {
+    let targetColor = '#000000';
+    if (lowerUserText.includes('red')) targetColor = '#DC2626';
+    else if (lowerUserText.includes('blue')) targetColor = '#2563EB';
+    else if (lowerUserText.includes('green')) targetColor = '#16A34A';
+    else if (lowerUserText.includes('white')) targetColor = '#FFFFFF';
+
+    let targetSearch = 'remarks';
+    if (lowerUserText.includes('status')) targetSearch = 'status';
+    else if (lowerUserText.includes('all')) targetSearch = 'all';
+
     // Directly execute the change in PowerPoint immediately!
     const res = await executeChangeTextColor({
-      searchText: 'remarks',
-      newColor: '#000000'
+      searchText: targetSearch,
+      newColor: targetColor
     });
     
     if (res.success && res.updatedCount > 0) {
-      const successMsg = `✅ **Directly applied to your slide!** I changed ${res.updatedCount} green remark items to black directly inside the table on this slide.`;
+      const successMsg = `✅ **Directly applied to your slide!** I changed the font color of ${res.updatedCount} remark/status items to \`${targetColor}\` directly inside the table on this slide.`;
       state.chatHistory.push({ role: 'user', parts: [{ text: userText }] });
       state.chatHistory.push({ role: 'model', parts: [{ text: successMsg }] });
       updateAssistantBubble(loadingBubble, successMsg);
@@ -1228,6 +1316,39 @@ Generate natural, engaging talking points and speaker notes that the presenter c
   }
 }
 
+async function handleCritiqueSlide() {
+  const box = document.getElementById('critique-result-box');
+  const textEl = document.getElementById('critique-result-text');
+  if (!box || !textEl) return;
+
+  let slideContent = state.currentSlideInfo.text;
+  if (!slideContent) {
+    await scanActiveSlide();
+    slideContent = state.currentSlideInfo.text;
+  }
+
+  if (!slideContent) {
+    showToast('No slide text detected. Please scan the slide first.');
+    return;
+  }
+
+  box.classList.remove('hidden');
+  textEl.innerHTML = '<div class="pulse-indicator"></div> Analyzing slide density, hierarchy, and visual impact...';
+
+  const prompt = `Critique this PowerPoint slide:\n"${slideContent}"\n\nProvide:
+1. Executive Clarity Score (1-10)
+2. Visual Hierarchy & Density Assessment
+3. 2 High-impact Recommendations to improve readability.
+Format crisply with bold lead-ins.`;
+
+  try {
+    const feedback = await callGeminiApi({ prompt, temperature: 0.3 });
+    textEl.innerHTML = renderMarkdown(feedback.trim());
+  } catch (err) {
+    textEl.textContent = `Error: ${err.message}`;
+  }
+}
+
 // ============================================================================
 // Settings & Key Management
 // ============================================================================
@@ -1507,8 +1628,9 @@ function initDOMListeners() {
     }
   });
 
-  // Speaker Notes & Insert Notes Handlers
+  // Speaker Notes & Critique Handlers
   document.getElementById('gen-notes-btn')?.addEventListener('click', handleGenerateNotes);
+  document.getElementById('critique-slide-btn')?.addEventListener('click', handleCritiqueSlide);
 
   // Wired up "Add to Slide Notes" button!
   document.getElementById('insert-notes-btn')?.addEventListener('click', () => {
